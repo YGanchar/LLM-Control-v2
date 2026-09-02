@@ -7,6 +7,7 @@ a = Analysis(
     binaries=[],
     datas=[('.env', '.'), ('model_layers.json', '.')],
     hiddenimports=['dotenv'],
+    collected_modules=[('dotenv', {})],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
