@@ -8,7 +8,7 @@ from typing import List, Any, Dict, Optional
 from dotenv import set_key, load_dotenv
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QMessageBox, QTabWidget
+    QTabWidget
 )
 from PySide6.QtGui import QFont, QCloseEvent  # QCloseEvent перенесен в QtGui
 from PySide6.QtCore import QTimer, Signal
@@ -28,7 +28,6 @@ if os.path.exists(_env_path):
 
 from services.system_monitor import RemoteMonitorThread
 from services.server_control import ServerControl
-from services.ssh_setup import SSHSetupHelper
 from scanner_widget import ScannerWidget
 from config_widget import ConfigWidget
 from server_widget import ServerControlWidget
@@ -118,7 +117,8 @@ class MainWindow(QMainWindow):
 
         self._init_metrics_labels()
         self._connect_signals()
-        self._check_ssh_prerequisites()
+        # По умолчанию открываем вкладку «Параметры модели» — там работа с пресетами
+        self.tab_widget.setCurrentIndex(1)
 
     def _setup_timers(self) -> None:
         self.system_update_timer = QTimer(self)
@@ -173,69 +173,6 @@ class MainWindow(QMainWindow):
 
         self._save_settings()
         event.accept()
-
-    def _check_ssh_prerequisites(self):
-        """Проверяет готовность SSH-доступа при запуске."""
-        # 1. Проверяем наличие SSH-ключа
-        key_path = os.path.expanduser("~/.ssh/id_ed25519_llm")
-        if not os.path.exists(key_path):
-            # Пробуем стандартные ключи
-            for kp in ["~/.ssh/id_ed25519", "~/.ssh/id_rsa"]:
-                if os.path.exists(os.path.expanduser(kp)):
-                    key_path = os.path.expanduser(kp)
-                    break
-            else:
-                key_path = None
-        
-        if not key_path:
-            self._show_ssh_setup_dialog()
-            return
-        
-        # 2. Тестируем подключение
-        success, msg = SSHSetupHelper.test_ssh_connection(
-            os.getenv("SERVER_USER", "yuri"),
-            os.getenv("SSH_HOST", "rtx")
-        )
-        
-        if not success:
-            self._show_ssh_setup_dialog()
-
-    def _show_ssh_setup_dialog(self):
-        """Показывает диалог настройки SSH."""
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("Настройка SSH-доступа")
-        dialog.setText("Беспарольный SSH-доступ не настроен.")
-        dialog.setInformativeText(
-            "Для работы приложения необходим беспарольный доступ к серверу.\n\n"
-            "Что вы хотите сделать?"
-        )
-        
-        # Кнопка: Сгенерировать ключ
-        btn_gen = dialog.addButton("Сгенерировать ключ", QMessageBox.AcceptRole)
-        # Кнопка: Скопировать ключ
-        btn_copy = dialog.addButton("Скопировать ключ на сервер", QMessageBox.AcceptRole)
-        # Кнопка: Инструкция
-        btn_inst = dialog.addButton("Показать инструкцию", QMessageBox.AcceptRole)
-        # Кнопка: Пропустить
-        dialog.addButton(QMessageBox.Cancel)
-        
-        dialog.exec()
-        
-        if dialog.clickedButton() == btn_gen:
-            result = SSHSetupHelper.generate_ssh_key()
-            dialog.setInformativeText(result)
-            dialog.exec()
-        elif dialog.clickedButton() == btn_copy:
-            result = SSHSetupHelper.copy_key_to_host(
-                os.getenv("SERVER_USER", "yuri"),
-                os.getenv("SSH_HOST", "rtx")
-            )
-            dialog.setInformativeText(result)
-            dialog.exec()
-        elif dialog.clickedButton() == btn_inst:
-            instructions = SSHSetupHelper.get_sudoers_instructions()
-            dialog.setDetailedText(instructions)
-            dialog.exec()
 
     def _init_metrics_labels(self) -> None:
         self.metrics_labels: Dict[str, QLabel] = {
