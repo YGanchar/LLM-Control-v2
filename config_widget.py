@@ -124,13 +124,14 @@ class ConfigWidget(QWidget):
         self.left_v_splitter = QSplitter(Qt.Vertical)
 
         self.output_table = QTableWidget()
-        self.output_table.setColumnCount(2)
-        self.output_table.setHorizontalHeaderLabels(["Имя файла .mod", "Дата (модификации)"])
+        self.output_table.setColumnCount(3)
+        self.output_table.setHorizontalHeaderLabels(["Имя файла .mod", "Папка", "Дата (модификации)"])
         self.output_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.output_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.output_table.setSelectionMode(QTableWidget.SingleSelection)
         self.output_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.output_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.output_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.output_table.itemDoubleClicked.connect(self.on_model_double_clicked)
 
         self.text_edit_left = QTextEdit()
@@ -332,12 +333,15 @@ class ConfigWidget(QWidget):
         self.text_edit_right.setPlainText(content)
         self.text_edit_left.clear()
 
+    def _is_hidden_path(self, path: str, base: str) -> bool:
+        """True, если файл лежит в подпапке (на любом уровне вложенности),
+        имя которой начинается с '_'. Имя самого файла не учитывается."""
+        rel_parts = os.path.relpath(path, base).split(os.sep)
+        return any(part.startswith("_") for part in rel_parts[:-1])
+
     def _find_mods_for_base(self, base_name: str) -> list:
-        matches = []
-        for path, size_mb, date_str in self.models_data:
-            if os.path.basename(path).startswith(base_name):
-                matches.append((path, size_mb, date_str))
-        return matches
+        # models_data — список 4-кортежей (path, size_mb, date_str, folder_name)
+        return [m for m in self.models_data if os.path.basename(m[0]).startswith(base_name)]
 
     def _detect_quant(self, model_name: str) -> str:
         name_upper = model_name.upper()
@@ -375,9 +379,15 @@ class ConfigWidget(QWidget):
             raw_mod_files = find_files_by_extension(self.mods_path, ".mod")
             models_processed = []
             for file_path, size_bytes, timestamp in raw_mod_files:
+                # Пропускаем пресеты, лежащие в подпапках с префиксом '_'
+                if self._is_hidden_path(file_path, self.mods_path):
+                    continue
                 size_mb = size_bytes / (1024 ** 2)
                 date_str = datetime.fromtimestamp(timestamp).strftime("%Y.%m.%d %H:%M")
-                models_processed.append((file_path, size_mb, date_str))
+                # Имя родительской папки (пусто, если файл лежит в корне MODS)
+                rel_parts = os.path.relpath(file_path, self.mods_path).split(os.sep)
+                folder_name = rel_parts[-2] if len(rel_parts) > 1 else ""
+                models_processed.append((file_path, size_mb, date_str, folder_name))
 
             self.models_data = models_processed
 
@@ -394,19 +404,23 @@ class ConfigWidget(QWidget):
         finally:
             self.button_modfiles.setEnabled(True)
 
-    def _populate_table(self, models: List[Tuple[str, float, str]]):
+    def _populate_table(self, models: List[Tuple[str, float, str, str]]):
         models_sorted = sorted(models, key=lambda x: os.path.basename(x[0]))
         self.output_table.setRowCount(len(models_sorted))
 
-        for row_index, (file_path, _, date_str) in enumerate(models_sorted):
+        for row_index, (file_path, _, date_str, folder_name) in enumerate(models_sorted):
             item_name = QTableWidgetItem(os.path.basename(file_path))
             item_name.setData(Qt.UserRole, file_path)
+
+            item_folder = QTableWidgetItem(folder_name or "—")
+            item_folder.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
             item_date = QTableWidgetItem(date_str)
             item_date.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
             self.output_table.setItem(row_index, 0, item_name)
-            self.output_table.setItem(row_index, 1, item_date)
+            self.output_table.setItem(row_index, 1, item_folder)
+            self.output_table.setItem(row_index, 2, item_date)
 
     def on_model_double_clicked(self, item):
         row = item.row()
