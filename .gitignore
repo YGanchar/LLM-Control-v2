@@ -1,0 +1,12 @@
+# Локальный рантайм-конфиг (путь к пресетам, сетевые параметры)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# PyInstaller — артефакты сборки
+build/
+dist/

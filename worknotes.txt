@@ -1,0 +1,5 @@
+source /home/yuri/projects/archivist/.venv/bin/activate
+
+cd /home/yuri/projects/LLM-Cluster/LLM-Control-v2
+
+pyinstaller --onefile --noconsole --name LLM-Control_v2 main.py
