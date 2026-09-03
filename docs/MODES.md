@@ -1,93 +1,107 @@
-# Режимы работы LLM-сервера (rtx — 2× RTX 3060, по 12 ГБ)
+# LLM server operating modes (rtx — 2× RTX 3060, 12 GB each)
 
-Подробная инструкция по запуску трёх режимов и описание их реализации на сервере.
-
----
-
-## 1. Аппаратная основа и главное ограничение
-
-Сервер `rtx` (10.0.0.2) имеет две видеокарты **NVIDIA GeForce RTX 3060 по 12 ГБ** (итого 24 ГБ VRAM).
-
-| Режим | Модель | Карты | Порт | Статус |
-|-------|--------|-------|------|--------|
-| **1** | Tiel-Coder-35B-A3B-MTP-UD (Q4_K_S, ~20 ГБ) | обе (GPU0 + GPU1) | 8080 | основной, автостарт |
-| **2** | малая модель (напр. Ornith-1.5-9B Q6_K, ~7 ГБ) | GPU0 | 8080 | из пресета `8080/`, вручную, конфликт с режимом 1 |
-| **3** | Ornith-1.5-9B (Q6_K, ~7 ГБ) | GPU1 | 8081 | вручную |
-
-**Ключевое ограничение по VRAM:** большая модель (~20 ГБ) физически занимает **обе** карты, поэтому **режим 1 несовместим ни с режимом 2, ни с режимом 3** — их нельзя запускать вместе.
-
-Режимы 2 и 3 используют **разные** карты (GPU0 / GPU1) и **разные** порты (8080 / 8081), поэтому **их можно запускать совместно** — получится две малые модели одновременно.
-
-> Если режим 1 уже сидит на обеих картах, новая модель не видит GPU1: `--list-devices` показывает только `CUDA0` с `0 MiB free` и падает с `CUDA out of memory` при `-dev 1`. Это **не баг конфига**, а нехватка памяти — нужно остановить режим 1.
+Detailed instructions for running three modes and how they are implemented on the
+server.
 
 ---
 
-## 2. Где что находится
+## 1. Hardware and the key constraint
 
-Клиент ↔ сервер по SSH (ключ `~/.ssh/id_ed25519_llm`, пользователь `yuri`).
+The `rtx` server (10.0.0.2) has two **NVIDIA GeForce RTX 3060** cards, 12 GB each
+(24 GB VRAM total).
 
-На сервере (`/`):
+| Mode | Model | Cards | Port | Status |
+|------|-------|-------|------|--------|
+| **1** | Tiel-Coder-35B-A3B-MTP-UD (Q4_K_S, ~20 GB) | both (GPU0 + GPU1) | 8080 | main, autostart |
+| **2** | small model (e.g. Ornith-1.5-9B Q6_K, ~7 GB) | GPU0 | 8080 | from preset `8080/`, manual, conflicts with mode 1 |
+| **3** | Ornith-1.5-9B (Q6_K, ~7 GB) | GPU1 | 8081 | manual |
 
-| Что | Путь |
-|-----|------|
-| Модели | `/srv/models/` |
-| Конфиги | `/srv/storage/` (NFS; на клиенте — `/media/rtx-storage/`, это **тот же файл**) |
-| Скрипты запуска | `/usr/local/bin/run-llama.sh`, `/usr/local/bin/run-llama-8081.sh` |
-| Бинарник llama-server | `/usr/local/bin/llama-server` |
-| systemd-сервисы | `llama-server.service`, `llama-server-8081.service` |
-| Оболочка-менеджер | `/usr/local/bin/llmctl` |
+**Key VRAM constraint:** the large model (~20 GB) physically spans **both** cards,
+so **mode 1 is incompatible with either mode 2 or mode 3** — they cannot run
+together.
 
-**NFS-нюанс:** `/media/rtx-storage/` на клиенте — это смонтированный `/srv/storage/` на сервере. Правим файл в одном месте — изменения сразу видны в другом. Конфиги-owned пользователем `yuri` (sudo не требуют); скрипты и сервисы — в root-каталогах (sudo требуют).
+Modes 2 and 3 use **different** cards (GPU0 / GPU1) and **different** ports
+(8080 / 8081), so **they can run together** — two small models at once.
 
-### 2.1. Библиотека пресетов (`/home/yuri/MODS/`)
-
-Пресеты — это `.mod`-файлы на клиенте. GUI («Сервер RTX») читает их из каталога
-`LAST_MODS_PATH` (по умолчанию `/home/yuri/MODS/`) **рекурсивно** — в том числе
-из подкаталогов, показывает в таблице, а по кнопке **Применить** записывает
-содержимое (без строк `INFO:`) в серверный конфиг выбранного инстанса через NFS.
-
-Файл `.mod` по формату совпадает с `.conf` (`MODEL / HOST / PORT / THREADS /
-CTX / BATCH / NGL / EXTRA` + опционально `INFO:`), но в `MODEL` уже указан
-серверный путь (`/srv/models/...`).
-
-Каталог разбит на подкаталоги по назначению:
-
-| Подкаталог | Содержит | Режим |
-|------------|----------|-------|
-| `large/` | актуальные большие модели (обе GPU, >11 ГБ) | режим 1 |
-| `8080/`  | актуальные малые модели (GPU0, ≤11 ГБ) | режим 2 |
-| `8081/`  | актуальные малые модели (GPU1, ≤11 ГБ) | режим 3 |
-| `old/`   | мёртвые / архивные пресеты | не используется |
-| `litera/`| образцовые (литературные) пресеты | не трогать |
-
-> `old/` и `litera/` GUI тоже просканирует (рекурсия), но в работу не берутся:
-> `old/` — устаревшие модели, `litera/` — эталонные конфиги для примера.
-
-**Связь «пресет → режим».** Радио-кнопка выбирает только **порт и файл конфига**,
-а конкретную модель определяет выбранный пресет:
-
-| Радио в GUI | Порт / файл конфига | Какой пресет применить |
-|-------------|---------------------|------------------------|
-| **Модель 1 (8080)** | `/media/rtx-storage/llama-mode.conf` | `large/` → режим 1, или `8080/` → режим 2 |
-| **Модель 2 (8081)** | `/media/rtx-storage/llama-mode-8081.conf` | `8081/` → режим 3 |
-
-> Радио «Модель 1» (8080) общее для режимов 1 и 2: они делят порт 8080 и GPU0,
-> поэтому вместе не работают — сначала остановите режим 1, затем примените
-> пресет из `8080/`.
+> If mode 1 already occupies both cards, a new model cannot see GPU1:
+> `--list-devices` shows only `CUDA0` with `0 MiB free` and it fails with
+> `CUDA out of memory` at `-dev 1`. This is **not a config bug**, it is lack of
+> memory — stop mode 1.
 
 ---
 
-## 3. Реализация на сервере (как это устроено)
+## 2. Where things live
 
-### 3.1. Конфиг-файл (`.conf`)
-Одна секция переменных. Обязательные ключи: `MODEL`, `HOST`, `PORT`, `THREADS`, `CTX`, `BATCH`, `NGL`, `EXTRA`.
+Client ↔ server over SSH (key `~/.ssh/id_ed25519_llm`, user `yuri`).
 
-- `NGL=999` — «загрузить в GPU всё, что влезает».
-- `EXTRA` — многострочная строка доп. ключей. **Важно:** перед `\` на продолжении строки **обязателен пробел**, иначе аргументы «слипнутся» в один.
-- `-dev N` — какие GPU использовать (списком через запятую: `-dev 0,1`).
-- `--tensor-split f1,f2` — доля модели на каждом GPU (для одной карты пишут `1`).
+On the server (`/`):
 
-**Режим 1 — `/srv/storage/llama-mode.conf`:**
+| What | Path |
+|------|------|
+| Models | `/srv/models/` |
+| Configs | `/srv/storage/` (NFS; on the client — `/media/rtx-storage/`, the **same file**) |
+| Launch scripts | `/usr/local/bin/run-llama.sh`, `/usr/local/bin/run-llama-8081.sh` |
+| llama-server binary | `/usr/local/bin/llama-server` |
+| systemd services | `llama-server.service`, `llama-server-8081.service` |
+| Manager wrapper | `/usr/local/bin/llmctl` |
+
+**NFS nuance:** `/media/rtx-storage/` on the client is the mounted
+`/srv/storage/` on the server. Edit the file in one place — the change is
+immediately visible in the other. Configs are owned by user `yuri` (no sudo
+needed); scripts and services live in root directories (sudo needed).
+
+### 2.1. Preset library (`/home/yuri/MODS/`)
+
+Presets are `.mod` files on the client. The GUI ("RTX Server") reads them from the
+`LAST_MODS_PATH` directory (default `/home/yuri/MODS/`) **recursively** — including
+subdirectories — shows them in the table, and on the **Apply** button writes the
+contents (minus `INFO:` lines) to the selected instance's server config via NFS.
+
+A `.mod` file matches the `.conf` format (`MODEL / HOST / PORT / THREADS / CTX /
+BATCH / NGL / EXTRA` + optional `INFO:`), but `MODEL` already contains the server
+path (`/srv/models/...`).
+
+The directory is split into subdirectories by purpose:
+
+| Subdirectory | Contains | Mode |
+|--------------|----------|------|
+| `large/` | current large models (both GPUs, >11 GB) | mode 1 |
+| `8080/`  | current small models (GPU0, ≤11 GB) | mode 2 |
+| `8081/`  | current small models (GPU1, ≤11 GB) | mode 3 |
+| `old/`   | dead / archived presets | not used |
+| `litera/`| exemplary (literary) presets | do not touch |
+
+> `old/` and `litera/` are also scanned by the GUI (recursion), but not used:
+> `old/` — outdated models, `litera/` — reference configs for example.
+
+**"Preset → mode" mapping.** The radio button selects only the **port and config
+file**; the actual model is determined by the chosen preset:
+
+| Radio in GUI | Port / config file | Which preset to apply |
+|--------------|--------------------|------------------------|
+| **Model 1 (8080)** | `/media/rtx-storage/llama-mode.conf` | `large/` → mode 1, or `8080/` → mode 2 |
+| **Model 2 (8081)** | `/media/rtx-storage/llama-mode-8081.conf` | `8081/` → mode 3 |
+
+> Radio "Model 1" (8080) is shared between modes 1 and 2: they share port 8080 and
+> GPU0, so they cannot run together — stop mode 1 first, then apply a preset from
+> `8080/`.
+
+---
+
+## 3. Implementation on the server (how it works)
+
+### 3.1. Config file (`.conf`)
+One section of variables. Mandatory keys: `MODEL`, `HOST`, `PORT`, `THREADS`,
+`CTX`, `BATCH`, `NGL`, `EXTRA`.
+
+- `NGL=999` — "load into the GPU whatever fits".
+- `EXTRA` — a multi-line string of extra keys. **Important:** a space before `\`
+  on a continuation line is **mandatory**, otherwise arguments "glue" into one.
+- `-dev N` — which GPUs to use (comma list: `-dev 0,1`).
+- `--tensor-split f1,f2` — the fraction of the model on each GPU (for a single
+  card, write `1`).
+
+**Mode 1 — `/srv/storage/llama-mode.conf`:**
 ```bash
 MODEL="/srv/models/Tiel-Coder-35B-A3B-MTP-UD-Q4_K_S/Tiel-Coder-35B-A3B-MTP-UD-Q4_K_S.gguf"
 HOST="0.0.0.0"
@@ -113,7 +127,7 @@ EXTRA="--parallel 1 \
 --jinja"
 ```
 
-**Режим 3 — `/srv/storage/llama-mode-8081.conf`:**
+**Mode 3 — `/srv/storage/llama-mode-8081.conf`:**
 ```bash
 MODEL="/srv/models/Ornith-1.5-9B-Q6_K/Ornith-1.5-9B-Q6_K.gguf"
 HOST="0.0.0.0"
@@ -140,89 +154,98 @@ EXTRA="--parallel 2 \
 -dev 1"
 ```
 
-### 3.2. Скрипт запуска (`run-llama*.sh`)
-Импортирует конфиг (`source "$CONFIG"`) и через `exec` запускает бинарник:
+### 3.2. Launch script (`run-llama*.sh`)
+Imports the config (`source "$CONFIG"`) and launches the binary via `exec`:
 ```bash
 exec /usr/local/bin/llama-server \
     -m "$MODEL" -t "$THREADS" -c "$CTX" -b "$BATCH" -ngl "$NGL" \
     --host "$HOST" --port "$PORT" $EXTRA
 ```
-(В `run-llama-8081.sh` путь к бинарнику был неверным — `/usr/bin/llama-server`, которого не существует; исправлено на `/usr/local/bin/llama-server`.)
+(In `run-llama-8081.sh` the binary path was wrong — `/usr/bin/llama-server`,
+which does not exist; fixed to `/usr/local/bin/llama-server`.)
 
-### 3.3. systemd-сервисы
-- `llama-server.service` → `ExecStart=/usr/local/bin/run-llama.sh` (**режим 1**). `enabled` — автостарт, `RequiresMountsFor=/srv/models`.
-- `llama-server-8081.service` → `ExecStart=/usr/local/bin/run-llama-8081.sh` (**режим 3**). `Restart=no`.
+### 3.3. systemd services
+- `llama-server.service` → `ExecStart=/usr/local/bin/run-llama.sh` (**mode 1**).
+  `enabled` — autostart, `RequiresMountsFor=/srv/models`.
+- `llama-server-8081.service` → `ExecStart=/usr/local/bin/run-llama-8081.sh`
+  (**mode 3**). `Restart=no`.
 
-### 3.4. Оболочка `llmctl`
+### 3.4. Wrapper `llmctl`
 `/usr/local/bin/llmctl <start|stop|restart|status|mode|logs> [8081]`
 
-- Маппинг: без аргумента → порт `8080` / сервис `llama-server`; с `8081` → `llama-server-8081`.
-- `start`/`stop`/`restart`/`status`/`logs` — через `sudo systemctl` (+ `fuser -k <port>/tcp` для форсированного освобождения порта при стопе).
-- `mode` — выводит текущий конфиг.
-- **Требует passwordless sudo** на сервере (см. §5).
+- Mapping: no argument → port `8080` / service `llama-server`; with `8081` →
+  `llama-server-8081`.
+- `start`/`stop`/`restart`/`status`/`logs` — via `sudo systemctl`
+  (+ `fuser -k <port>/tcp` to force-release the port on stop).
+- `mode` — prints the current config.
+- **Requires passwordless sudo** on the server (see §5).
 
-### 3.5. GUI-приложение (вкладка «Сервер RTX»)
-Два радио-переключателя инстансов:
+### 3.5. GUI app ("RTX Server" tab)
+Two instance radio buttons:
 
-| Радио в GUI | Соответствует | Конфиг | Пресет | Команда |
-|-------------|---------------|--------|--------|---------|
-| **Модель 1 (порт 8080, автостарт)** | Режим 1 **или** 2 | `/media/rtx-storage/llama-mode.conf` | `large/` (режим 1) / `8080/` (режим 2) | `llmctl …` (без суффикса) |
-| **Модель 2 (порт 8081, вручную, GPU1)** | Режим 3 | `/media/rtx-storage/llama-mode-8081.conf` | `8081/` | `llmctl 8081 …` |
+| Radio in GUI | Corresponds to | Config | Preset | Command |
+|--------------|----------------|--------|--------|---------|
+| **Model 1 (port 8080, autostart)** | Mode 1 **or** 2 | `/media/rtx-storage/llama-mode.conf` | `large/` (mode 1) / `8080/` (mode 2) | `llmctl …` (no suffix) |
+| **Model 2 (port 8081, manual, GPU1)** | Mode 3 | `/media/rtx-storage/llama-mode-8081.conf` | `8081/` | `llmctl 8081 …` |
 
-Кнопки: **Применить** (сохраняет вставленную конфигурацию в файл на сервере через NFS), **Старт / Стоп / Перезапуск / Статус / Конфиг / Логи**.
+Buttons: **Apply** (saves the pasted config to the file on the server via NFS),
+**Start / Stop / Restart / Status / Config / Logs**.
 
-Команда уходит так:
+The command goes out like this:
 ```
-ssh -i <ключ> rtx "sudo /usr/local/bin/llmctl <действие> <суффикс>"
+ssh -i <key> rtx "sudo /usr/local/bin/llmctl <action> <suffix>"
 ```
-Поэтому GUI одновременно требует **(1)** беспарольный SSH по ключу и **(2)** passwordless sudo на сервере.
+So the GUI simultaneously requires **(1)** passwordless SSH by key and
+**(2)** passwordless sudo on the server.
 
-Валидатор конфига в приложении ловит типичные способы сломать запуск:
-- `NGL="auto"` + ручной `--tensor-split` (вызывает OOM);
-- отсутствие пробела перед `\` в многострочном `EXTRA`;
-- пропущенные обязательные ключи (`MODEL`, `PORT`, `CTX`, `NGL`);
-- невалидные диапазоны `PORT` / `CTX` / `NGL`.
+The app's config validator catches typical ways to break a launch:
+- `NGL="auto"` + manual `--tensor-split` (causes OOM);
+- missing space before `\` in a multi-line `EXTRA`;
+- missing mandatory keys (`MODEL`, `PORT`, `CTX`, `NGL`);
+- invalid `PORT` / `CTX` / `NGL` ranges.
 
 ---
 
-## 4. Как запустить каждый режим
+## 4. How to start each mode
 
-### Режим 1 — большая модель, обе карты, 8080 (основной)
-**Из GUI:** вкладка «Сервер RTX» → радио «Модель 1 (порт 8080)» → **Старт**.
-**Из терминала (llmctl):**
+### Mode 1 — large model, both cards, 8080 (main)
+**From GUI:** "RTX Server" tab → radio "Model 1 (port 8080)" → **Start**.
+**From terminal (llmctl):**
 ```bash
 ssh rtx "sudo /usr/local/bin/llmctl start"
 ```
-**systemd (автостарт):**
+**systemd (autostart):**
 ```bash
 sudo systemctl start llama-server
 ```
 
-### Режим 3 — малая модель, GPU1, 8081
-**Из GUI:** вкладка «Сервер RTX» → радио «Модель 2 (порт 8081, GPU1)» → **Старт**.
-**Из терминала:**
+### Mode 3 — small model, GPU1, 8081
+**From GUI:** "RTX Server" tab → radio "Model 2 (port 8081, GPU1)" → **Start**.
+**From terminal:**
 ```bash
 ssh rtx "sudo /usr/local/bin/llmctl start 8081"
-# или
+# or
 sudo systemctl start llama-server-8081
 ```
-**Проверка:** `nvidia-smi` — GPU1 загружен; `curl http://rtx:8081/health`; в GUI индикатор `8081: ACTIVE | … GB`.
+**Verify:** `nvidia-smi` — GPU1 is loaded; `curl http://rtx:8081/health`; in the
+GUI indicator `8081: ACTIVE | … GB`.
 
-### Режим 2 — малая модель, GPU0, 8080 (вручную)
+### Mode 2 — small model, GPU0, 8080 (manual)
 
-Пресеты для режима 2 лежат в `8080/` библиотеки `/home/yuri/MODS/`. Режим 2 не
-имеет отдельного systemd-сервиса и делит с режимом 1 порт 8080 и GPU0, поэтому
-запускается **только при остановленном режиме 1**.
+Presets for mode 2 live in `8080/` of the `/home/yuri/MODS/` library. Mode 2 has
+no separate systemd service and shares port 8080 and GPU0 with mode 1, so it runs
+**only when mode 1 is stopped**.
 
-**А. Из пресета через GUI** (рекомендовано):
-1. Вкладка «Конфиг» → выбрать пресет из `8080/` (таблица `.mod`, сканер рекурсивный).
-2. Вкладка «Управление» → радио **«Модель 1 (порт 8080)»**.
-3. **Применить** (записывает `.mod` в `/media/rtx-storage/llama-mode.conf`), затем **Старт**.
-> Пресет из `8080/` уже содержит верные флаги для одной GPU (`-sm none`, без
-> `--tensor-split`, без голых `export CUDA_VISIBLE_DEVICES`); `-dev` не нужен —
-> по умолчанию берётся GPU0.
+**A. From a preset via GUI** (recommended):
+1. "Config" tab → choose a preset from `8080/` (the `.mod` table, recursive scan).
+2. "Manage" tab → radio **"Model 1 (port 8080)"**.
+3. **Apply** (writes the `.mod` to `/media/rtx-storage/llama-mode.conf`), then
+   **Start**.
+> A preset from `8080/` already contains the correct flags for a single GPU
+> (`-sm none`, no `--tensor-split`, no bare `export CUDA_VISIBLE_DEVICES`);
+> `-dev` is not needed — GPU0 is taken by default.
 
-**Б. Разовый запуск вручную** (модель на GPU0 через `CUDA_VISIBLE_DEVICES`, порт 8080):
+**B. One-off manual launch** (model on GPU0 via `CUDA_VISIBLE_DEVICES`, port 8080):
 ```bash
 ssh rtx
 CUDA_VISIBLE_DEVICES=0 /usr/local/bin/llama-server \
@@ -232,45 +255,54 @@ CUDA_VISIBLE_DEVICES=0 /usr/local/bin/llama-server \
     --parallel 2 --temp 0.2 --top-p 0.95 --top-k 20 --min-p 0.02 \
     -ctk q4_0 -ctv q4_0 --kv-unified -fa on --jinja -ub 512 --reasoning off
 ```
-> `CUDA_VISIBLE_DEVICES=0` скрыто показывает только GPU0, поэтому `-dev` / `--tensor-split` не нужны — llama-server сам возьмёт видимый GPU0.
+> `CUDA_VISIBLE_DEVICES=0` hides GPU0 from view, so `-dev` / `--tensor-split` are
+> not needed — llama-server takes the visible GPU0 itself.
 
-⚠️ Порт 8080 уже занят режимом 1, а GPU0 — тоже режимом 1. Режим 2 можно запускать **только при остановленном режиме 1**. Совместим он только с режимом 3 (разные карты и порты).
+⚠️ Port 8080 is already taken by mode 1, and GPU0 is too. Mode 2 can be started
+**only when mode 1 is stopped**. It is compatible only with mode 3 (different
+cards and ports).
 
-> Отдельного сервиса для режима 2 нет: `llmctl start` (без суффикса) запускает
-> тот же `llama-server.service`, что и режим 1, но с содержимым из
-> `llama-mode.conf` — то есть с вашим пресетом из `8080/`.
-
----
-
-## 5. Требования и зависимости
-
-- **SSH по ключу** `~/.ssh/id_ed25519_llm` (беспарольный) — настраивается мастером в GUI («Настройка SSH»).
-- **Passwordless sudo** на сервере для пользователя `yuri` (файл `/etc/sudoers.d/…`, строка `NOPASSWD`). Без него кнопки GUI и `llmctl` не запустят сервис: `sudo` запросит пароль, которого в non-interactive SSH нет. Если парольless пока не настроен — запускайте сервисы вручную через `ssh rtx` с вводом пароля, либо настройте sudoers.
-- **NFS** `/media/rtx-storage` на клиенте ≡ `/srv/storage` на сервере — редактирование конфига в любом месте сразу видно в другом.
+> There is no separate service for mode 2: `llmctl start` (no suffix) launches the
+> same `llama-server.service` as mode 1, but with the contents of
+> `llama-mode.conf` — i.e. your preset from `8080/`.
 
 ---
 
-## 6. Устранение неполадок
+## 5. Requirements and dependencies
 
-| Симптом | Причина | Что делать |
-|---------|---------|------------|
-| `CUDA out of memory` / `invalid device: 1` | Обе карты заняты (запущен режим 1) | Остановите режим 1, затем запускайте режим 2/3 |
-| `/usr/bin/llama-server: нет такого файла` (код 127) | Неверный путь к бинарнику | Использовать `/usr/local/bin/llama-server` |
-| Порт занят / сервис не стартует | На том же порту уже работает другой режим | 8080: режим 1/2; 8081: режим 3. Остановить конфликтующий |
-| Кнопки GUI не работают | Нет passwordless sudo на сервере | Настроить `/etc/sudoers.d/…` (см. §5) или запускать вручную |
-| `Pseudo-terminal warning` | Информационное сообщение SSH | Игнорируется (GUI фильтрует) |
-| Логи запуска | — | GUI: кнопка «Логи»; или `ssh rtx "sudo journalctl -u llama-server-8081 -f"` |
+- **SSH by key** `~/.ssh/id_ed25519_llm` (passwordless) — set up with the wizard
+  in the GUI ("SSH Setup").
+- **Passwordless sudo** on the server for user `yuri` (file
+  `/etc/sudoers.d/…`, line `NOPASSWD`). Without it, the GUI buttons and `llmctl`
+  will not start the service: `sudo` will ask for a password, which a non-interactive
+  SSH has none. If passwordless is not set up yet — start services manually via
+  `ssh rtx` with a password prompt, or set up sudoers.
+- **NFS** `/media/rtx-storage` on the client ≡ `/srv/storage` on the server —
+  editing the config in any place is immediately visible in the other.
 
 ---
 
-## 7. Шпаргалка совместимости
+## 6. Troubleshooting
 
-| | Режим 1 (8080, GPU0+1) | Режим 2 (8080, GPU0) | Режим 3 (8081, GPU1) |
+| Symptom | Cause | What to do |
+|---------|-------|------------|
+| `CUDA out of memory` / `invalid device: 1` | Both cards busy (mode 1 running) | Stop mode 1, then start modes 2/3 |
+| `/usr/bin/llama-server: no such file` (code 127) | Wrong binary path | Use `/usr/local/bin/llama-server` |
+| Port busy / service won't start | Another mode already on the same port | 8080: mode 1/2; 8081: mode 3. Stop the conflicting one |
+| GUI buttons don't work | No passwordless sudo on server | Set up `/etc/sudoers.d/…` (see §5) or run manually |
+| `Pseudo-terminal warning` | Informational SSH message | Ignored (GUI filters it) |
+| Launch logs | — | GUI: "Logs" button; or `ssh rtx "sudo journalctl -u llama-server-8081 -f"` |
+
+---
+
+## 7. Compatibility cheat sheet
+
+| | Mode 1 (8080, GPU0+1) | Mode 2 (8080, GPU0) | Mode 3 (8081, GPU1) |
 |---|---|---|---|
-| **Режим 1** | — | конфликт (порт + карты) | конфликт (карты) |
-| **Режим 2** | конфликт | — | ✅ совместим |
-| **Режим 3** | конфликт | ✅ совместим | — |
+| **Mode 1** | — | conflict (port + cards) | conflict (cards) |
+| **Mode 2** | conflict | — | ✅ compatible |
+| **Mode 3** | conflict | ✅ compatible | — |
 
-**Рабочие комбинации:**
-- **Режим 1 в одиночку** — большая модель на обеих картах.
-- **Режим 2 + Режим 3** — две малые модели одновременно (GPU0/8080 + GPU1/8081).
+**Working combinations:**
+- **Mode 1 alone** — large model on both cards.
+- **Mode 2 + Mode 3** — two small models at once (GPU0/8080 + GPU1/8081).
