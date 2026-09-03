@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('.env', '.'), ('model_layers.json', '.')],
+    datas=[('.env', '.'), ('model_layers.json', '.'), ('locales', 'locales')],
     hiddenimports=['dotenv'],
     collected_modules=[('dotenv', {})],
     hookspath=[],

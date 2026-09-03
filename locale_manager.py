@@ -14,6 +14,12 @@ def _resolve_app_dir() -> str:
     """Диретория приложения: рядом с исполняемым (frozen-сборка PyInstaller)
     или со скриптом (venv). Аналогично _resolve_env_path() в модулях UI."""
     if getattr(sys, 'frozen', False):
+        # В onefile-сборке PyInstaller все данные извлекаются в _MEIPASS,
+        # а sys.executable указывает на исходный путь к бинарю — поэтому
+        # корнем приложения должен быть именно _MEIPASS.
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass and os.path.isdir(meipass):
+            return meipass
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
