@@ -7,6 +7,10 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
+# Виртуальные окружения проекта
+.venv/
+.verify-venv/
+
 # PyInstaller — артефакты сборки
 build/
 dist/
