@@ -1,4 +1,4 @@
-# services/system_monitor.py
+# -*- coding: utf-8 -*-
 import os
 import socket
 import logging
@@ -9,14 +9,16 @@ from typing import Optional
 from dotenv import load_dotenv
 from PySide6.QtCore import QThread, Signal
 
+from services.ssh_manager import SSHManager
+
 DEFAULT_HOST = "10.0.0.2"
 DEFAULT_USER = "yuri"
 DEFAULT_MAC = "44:8A:5B:5E:79:88"
 SSH_TIMEOUT = 5
 UPDATE_INTERVAL_MS = 2000
 
-# Порты инстансов, за которыми следим. Первый - всегда автостартующий (llama-server.service),
-# второй - опциональный ручной запуск на второй карте.
+# Порты инстансов, за которыми следим. Первый - всегда автостартующий
+# (llama-server.service), второй - опциональный ручной запуск на второй карте.
 KNOWN_PORTS = (8080, 8081)
 
 
@@ -36,28 +38,14 @@ class RemoteMonitorThread(QThread):
         self.planned_shutdown = False
         self.consecutive_failures = 0  # Счётчик для принудительного реконнекта
         self._prev_cpu = None  # Для расчёта CPU через /proc/stat
-        self._last_gpu_count = None  # Для отслеживания изменений числа GPU
-        
-        # Поиск SSH-ключа
-        self.ssh_key_path = self._find_ssh_key()
+
+        # Поиск SSH-ключа — делегируем единому менеджеру
+        self.ssh_key_path = SSHManager.get_ssh_key_path()
         if not self.ssh_key_path:
             logging.warning(
                 "[Monitor] SSH-ключ не найден. Беспарольный доступ не работает. "
                 "Выполните: ssh-keygen -t ed25519 && ssh-copy-id yuri@rtx"
             )
-
-    def _find_ssh_key(self) -> Optional[str]:
-        """Ищет первый доступный SSH-ключ из списка вариантов."""
-        key_paths = [
-            "~/.ssh/id_ed25519_llm",  # Специальный ключ для LLM-Control
-            "~/.ssh/id_ed25519",       # Стандартный Ed25519
-            "~/.ssh/id_rsa",           # Стандартный RSA
-        ]
-        for kp in key_paths:
-            expanded = os.path.expanduser(kp)
-            if os.path.exists(expanded):
-                return expanded
-        return None
 
     def _safe_float(self, value_str: str, default: float = 0.0) -> float:
         if not value_str:
@@ -74,7 +62,6 @@ class RemoteMonitorThread(QThread):
                 self.ssh.close()
             self.ssh = paramiko.SSHClient()
             self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
             # Загружаем SSH-ключ
             pkey = None
             if self.ssh_key_path:
@@ -84,7 +71,6 @@ class RemoteMonitorThread(QThread):
                     logging.warning(f"[Monitor] Не удалось загрузить ключ {self.ssh_key_path}: {e}")
             else:
                 logging.error("[Monitor] Нет SSH-ключа для подключения.")
-
             self.ssh.connect(
                 hostname=self.host,
                 username=self.user,
@@ -93,7 +79,6 @@ class RemoteMonitorThread(QThread):
                 look_for_keys=False,   # отключаем автопоиск, чтобы не путаться
                 allow_agent=False
             )
-
             # Keepalive: каждые 10 секунд шлём пульс, чтобы "полумёртвые" сессии обнаруживались
             self.ssh.get_transport().set_keepalive(10)
             return True
@@ -117,19 +102,16 @@ class RemoteMonitorThread(QThread):
             if self.planned_shutdown and self._is_port_open(self.host, 22):
                 self.planned_shutdown = False
                 logging.info("[Monitor] Сервер снова доступен, возобновляю мониторинг.")
-
             stats = {
                 "system": {"cpu": 0.0, "ram": 0.0},
                 "instances": {port: {"running": False, "pid": None, "vram_gb": 0.0} for port in KNOWN_PORTS},
                 "gpu": []  # список {"index":.., "used_gb":.., "total_gb":.., "power_w":..}
             }
-
             is_connected = False
             if self.ssh and self.ssh.get_transport() and self.ssh.get_transport().is_active():
                 is_connected = True
             elif not self.planned_shutdown:
                 is_connected = self._connect_ssh()
-
             if is_connected and not self.planned_shutdown:
                 # Самовосстановление: после 3 сбоев подряд принудительно пересоздаём соединение
                 if self.consecutive_failures >= 3:
@@ -142,13 +124,11 @@ class RemoteMonitorThread(QThread):
                     self.ssh = None
                     self.consecutive_failures = 0
                     is_connected = self._connect_ssh()
-
                 if is_connected:
                     try:
                         # 1. Сбор метрик CPU и RAM через /proc для надёжности
                         proc_stat = self._exec("cat /proc/stat")
                         meminfo = self._exec("cat /proc/meminfo")
-                        
                         # Парсинг CPU из /proc/stat
                         if proc_stat and self._prev_cpu is not None:
                             cpu_line = [l for l in proc_stat.splitlines() if l.startswith('cpu ')]
@@ -162,10 +142,8 @@ class RemoteMonitorThread(QThread):
                                         prev_total = sum(prev)
                                         curr_idle = curr[3] + (curr[4] if len(curr) > 4 else 0)
                                         prev_idle = prev[3] + (prev[4] if len(prev) > 4 else 0)
-                                        
                                         total_diff = curr_total - prev_total
                                         idle_diff = curr_idle - prev_idle
-                                        
                                         if total_diff > 0:
                                             cpu_usage = 100.0 * (1.0 - idle_diff / total_diff)
                                             stats["system"]["cpu"] = max(0.0, min(100.0, cpu_usage))
@@ -181,7 +159,6 @@ class RemoteMonitorThread(QThread):
                                         self._prev_cpu = list(map(int, parts[1:]))
                                     except Exception:
                                         pass
-                        
                         # Парсинг RAM из /proc/meminfo
                         if meminfo:
                             mem_total = None
@@ -195,13 +172,11 @@ class RemoteMonitorThread(QThread):
                                     mem_free = self._safe_float(line.split()[1], default=None)
                                     if mem_free is not None:
                                         mem_available = mem_free
-                            
                             if mem_total and mem_total > 0 and mem_available is not None:
                                 used_percent = 100.0 * (1.0 - mem_available / mem_total)
                                 stats["system"]["ram"] = max(0.0, min(100.0, used_percent))
                             else:
                                 logging.debug("[Monitor] Не удалось получить данные RAM из /proc/meminfo")
-
                         # 2. Процессы llama-server (с портами из cmdline)
                         proc_part = self._exec("pgrep -af llama-server")
                         port_by_pid = {}
@@ -217,7 +192,6 @@ class RemoteMonitorThread(QThread):
                                 if port in stats["instances"]:
                                     stats["instances"][port]["running"] = True
                                     stats["instances"][port]["pid"] = int(pid_str)
-
                         # 3. VRAM/питание по каждой карте целиком - отдельным запросом,
                         # без склейки с другими командами (надёжнее парсить)
                         gpu_part = self._exec(
@@ -233,19 +207,13 @@ class RemoteMonitorThread(QThread):
                                     "total_gb": self._safe_float(parts[2], default=12288.0) / 1024.0,
                                     "power_w": int(self._safe_float(parts[3])),
                                 })
-                        
-                        # Логируем изменение числа GPU только один раз (не спамим)
-                        current_gpu_count = len(stats["gpu"])
-                        if current_gpu_count != self._last_gpu_count:
-                            if current_gpu_count == 0:
-                                logging.warning(
-                                    "[Monitor] nvidia-smi не вернул данные GPU "
-                                    "(драйвер не загружен, нет карт или nvidia-smi недоступен)."
-                                )
-                            else:
-                                logging.info(f"[Monitor] Обнаружено GPU: {current_gpu_count}")
-                            self._last_gpu_count = current_gpu_count
-
+                        # Точечная проверка: на сервере с двумя 3060 ожидаем 2 карты.
+                        # Если меньше — карта пропала (драйвер, отказ), показываем сырой вывод.
+                        if len(stats["gpu"]) < 2:
+                            logging.warning(
+                                f"[Monitor] Ожидалось 2 GPU в выводе nvidia-smi, получено "
+                                f"{len(stats['gpu'])}. Сырой вывод: {gpu_part!r}"
+                            )
                         # 4. VRAM по каждому процессу - отдельным запросом, разносим между
                         # инстансами по портам (полученным из pgrep выше)
                         apps_part = self._exec(
@@ -260,10 +228,8 @@ class RemoteMonitorThread(QThread):
                                 port = port_by_pid.get(pid)
                                 if port in stats["instances"]:
                                     stats["instances"][port]["vram_gb"] += mem_gb
-
                         # Дошли до конца без исключений — соединение здоровое, сбрасываем счётчик
                         self.consecutive_failures = 0
-
                     except Exception as e:
                         if not self.planned_shutdown:
                             self.consecutive_failures += 1
@@ -272,7 +238,6 @@ class RemoteMonitorThread(QThread):
                 # В режиме запланированного отключения при закрытом порте просто ждём,
                 # planned_shutdown НЕ сбрасываем.
                 pass
-
             self.metrics_received.emit(stats)
             self.msleep(UPDATE_INTERVAL_MS)
 

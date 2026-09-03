@@ -20,7 +20,7 @@ class ServerControl:
     Поэтому оставляем пустой __init__, чтобы не ломать сборку.
 
     Если понадобится локальный контроль процессов на основе psutil — дописать
-    методы заново (скелет был в _replacements/services_server_control.py).
+    методы заново.
     """
 
     def __init__(self) -> None:
