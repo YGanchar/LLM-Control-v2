@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# =============================================================================
+# llmctl — оболочка-менеджер для инстансов llama-server (LLM-Control).
+#
+#   llmctl <действие> [8081]
+#
+# Действия: start | stop | restart | status | mode | logs
+#   без суффикса  → инстанс 8080 (systemd-сервис llama-server, режим 1)
+#   с суффиксом 8081 → инстанс 8081 (systemd-сервис llama-server-8081, режим 3)
+#
+# Все действия выполняются через systemctl как root: llmctl вызывается через
+#   sudo /usr/local/bin/llmctl …
+# поэтому дополнительные привилегии внутри не требуются.
+# Требует passwordless sudo для llmctl (см. /etc/sudoers.d/llmctl).
+# =============================================================================
+
+PORT_8080=8080
+PORT_8081=8081
+CONF_DIR="${LLMCTL_CONF_DIR:-/srv/storage}"
+SERVICE_8080="llama-server"
+SERVICE_8081="llama-server-8081"
+
+usage() {
+    cat <<'EOF'
+Использование: llmctl <действие> [8081]
+
+  start       запустить инстанс
+  stop        остановить инстанс (форсированно освободит порт 8080/8081)
+  restart     перезапустить инстанс
+  status      статус systemd-сервиса
+  mode        вывести текущую конфигурацию
+  logs        логи journald в реальном времени (tail -f)
+
+Суффикс "8081" выбирает второй инстанс (GPU1, порт 8081).
+По умолчанию — инстанс 8080 (GPU0+GPU1, порт 8080).
+EOF
+}
+
+action="${1:-}"
+suffix="${2:-}"
+
+if [ -z "$action" ]; then
+    usage
+    exit 1
+fi
+
+if [ "$suffix" = "8081" ]; then
+    service="$SERVICE_8081"
+    port="$PORT_8081"
+else
+    service="$SERVICE_8080"
+    port="$PORT_8080"
+fi
+
+case "$action" in
+    start|restart)
+        systemctl "$action" "$service"
+        ;;
+    stop)
+        systemctl stop "$service"
+        # Форсированно освободим порт, если процесс всё ещё держит его.
+        if command -v fuser >/dev/null 2>&1; then
+            fuser -k "${port}/tcp" >/dev/null 2>&1 || true
+            sleep 1
+        fi
+        ;;
+    status)
+        systemctl status "$service" --no-pager --no-legend
+        ;;
+    logs)
+        journalctl -u "$service" --no-pager -f
+        ;;
+    mode)
+        conf="${CONF_DIR}/llama-mode.conf"
+        [ "$suffix" = "8081" ] && conf="${CONF_DIR}/llama-mode-8081.conf"
+        printf 'Инстанс : %s (порт %s)\n' "$service" "$port"
+        printf 'Конфиг  : %s\n' "$conf"
+        printf -- '------------------------------------------------\n'
+        if [ -r "$conf" ]; then
+            cat "$conf"
+        else
+            echo "(файл конфига не найден или недоступен: $conf)" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "llmctl: неизвестное действие «$action»" >&2
+        usage
+        exit 1
+        ;;
+esac

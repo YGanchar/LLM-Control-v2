@@ -1,0 +1,15 @@
+[Unit]
+Description=Llama Server — Режим 3 (8081, GPU1)
+Documentation=file:///usr/local/bin/llmctl
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/srv/models
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/run-llama-8081.sh
+# Режим 3 запускается по требованию, автостарт не нужен.
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
