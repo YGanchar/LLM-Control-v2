@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont
 
+from locale_manager import locale
+
 # Предполагаем наличие этого модуля в проекте
 try:
     from services.model_scanner import find_files_by_extension
@@ -43,11 +45,11 @@ class ScannerWidget(QWidget):
 
         # Панель выбора пути
         self.scan_path_layout = QHBoxLayout()
-        self.scan_path_label = QLabel("Путь сканирования:")
+        self.scan_path_label = QLabel(locale.translate('scanner.path_label'))
         self.scan_path_edit = QLineEdit(self.current_scan_path)
         self.scan_path_edit.setReadOnly(True)
 
-        self.browse_button = QPushButton("Обзор...")
+        self.browse_button = QPushButton(locale.translate('scanner.browse'))
         self.browse_button.clicked.connect(self._browse_directory)
 
         self.scan_path_layout.addWidget(self.scan_path_label)
@@ -57,9 +59,9 @@ class ScannerWidget(QWidget):
 
         # Кнопки управления
         self.control_buttons_layout = QHBoxLayout()
-        self.scan_button = QPushButton("Сканировать")
+        self.scan_button = QPushButton(locale.translate('scanner.scan'))
         self.scan_button.clicked.connect(self.start_scan)
-        self.save_button = QPushButton("Сохранить список")
+        self.save_button = QPushButton(locale.translate('scanner.save_list'))
         self.save_button.clicked.connect(self.save_sorted_list)
 
         self.control_buttons_layout.addWidget(self.scan_button)
@@ -77,7 +79,11 @@ class ScannerWidget(QWidget):
         # Таблица
         self.table_widget = QTableWidget()
         self.table_widget.setColumnCount(3)
-        self.table_widget.setHorizontalHeaderLabels(["Имя модели", "Размер (GB)", "Vision"])
+        self.table_widget.setHorizontalHeaderLabels([
+            locale.translate('scanner.col_name'),
+            locale.translate('scanner.col_size'),
+            locale.translate('scanner.col_vision'),
+        ])
         self.table_widget.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table_widget.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_widget.setSelectionMode(QTableWidget.SingleSelection)
@@ -96,14 +102,22 @@ class ScannerWidget(QWidget):
         self.table_widget.itemDoubleClicked.connect(self.on_model_double_clicked)
 
     def _browse_directory(self):
-        directory = QFileDialog.getExistingDirectory(self, "Выбрать директорию для сканирования", self.current_scan_path)
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            locale.translate('scanner.browse_title'),
+            self.current_scan_path,
+        )
         if directory:
             self.current_scan_path = directory
             self.scan_path_edit.setText(self.current_scan_path)
 
     def start_scan(self):
         if not self.current_scan_path or not os.path.isdir(self.current_scan_path):
-            QMessageBox.warning(self, "Ошибка", "Выбранный путь не существует или недоступен.")
+            QMessageBox.warning(
+                self,
+                locale.translate('common.error'),
+                locale.translate('scanner.path_not_exist'),
+            )
             return
 
         self.scan_started.emit()
@@ -144,7 +158,11 @@ class ScannerWidget(QWidget):
             
         except Exception as e:
             logging.error(f"Ошибка сканирования: {e}")
-            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при сканировании:\n{str(e)}")
+            QMessageBox.critical(
+                self,
+                locale.translate('common.error'),
+                f"{locale.translate('scanner.scan_error')}\n{str(e)}",
+            )
         finally:
             self._set_ui_enabled(True)
             self.progress_bar.setVisible(False)
@@ -171,7 +189,7 @@ class ScannerWidget(QWidget):
             self.table_widget.setItem(row_index, 1, item_size)
 
             # Vision статус
-            item_vision = QTableWidgetItem("Есть" if has_vision else "")
+            item_vision = QTableWidgetItem(locale.translate('scanner.vision_yes') if has_vision else "")
             item_vision.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
             if has_vision:
                 item_vision.setForeground(green_brush)
@@ -199,7 +217,12 @@ class ScannerWidget(QWidget):
     def save_sorted_list(self):
         if not self.models_data: 
             return
-        file_path, _ = QFileDialog.getSaveFileName(self, "Сохранить список", "", "Текстовые файлы (*.txt)")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            locale.translate('scanner.save_title'),
+            "",
+            locale.translate('scanner.save_filter'),
+        )
         if file_path:
             try:
                 with open(file_path, 'w', encoding='utf-8') as file:
@@ -207,7 +230,11 @@ class ScannerWidget(QWidget):
                         v_flag = "[Vision]" if vision else ""
                         file.write(f"{os.path.basename(path)}, {size:.2f} GB {v_flag}\n")
             except Exception as e:
-                QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить файл: {e}")
+                QMessageBox.warning(
+                    self,
+                    locale.translate('common.error'),
+                    f"{locale.translate('scanner.save_error')}{e}",
+                )
 
     def on_model_double_clicked(self, item):
         row = item.row()
@@ -215,3 +242,21 @@ class ScannerWidget(QWidget):
             full_path, size_gb, _ = self.models_data[row]
             logging.info(f"[SW] Выбрана модель: {full_path}")
             self.model_selected.emit(full_path, size_gb)
+
+    def retranslate(self) -> None:
+        """Перекладываем статические элементы без пересоздания виджетов/данных."""
+        self.scan_path_label.setText(locale.translate('scanner.path_label'))
+        self.browse_button.setText(locale.translate('scanner.browse'))
+        self.scan_button.setText(locale.translate('scanner.scan'))
+        self.save_button.setText(locale.translate('scanner.save_list'))
+        self.table_widget.setHorizontalHeaderLabels([
+            locale.translate('scanner.col_name'),
+            locale.translate('scanner.col_size'),
+            locale.translate('scanner.col_vision'),
+        ])
+        # Перекладываем только ячейки «Есть» в колонке Vision (остальные данные — нет)
+        vision_yes = locale.translate('scanner.vision_yes')
+        for row_index, (_, _, has_vision) in enumerate(self.models_data):
+            item = self.table_widget.item(row_index, 2)
+            if item is not None:
+                item.setText(vision_yes if has_vision else "")

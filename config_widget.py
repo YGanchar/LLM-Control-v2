@@ -12,8 +12,12 @@ from PySide6.QtWidgets import (
     QTextEdit, QMessageBox
 )
 from PySide6.QtCore import Qt, Slot, Signal, QTimer
+from PySide6.QtWidgets import QComboBox
 
+from dotenv import set_key
 from services.model_scanner import find_files_by_extension
+
+from locale_manager import locale
 
 
 def _resolve_env_path() -> str:
@@ -38,6 +42,8 @@ class ConfigWidget(QWidget):
     scan_started = Signal()
     scan_finished = Signal(list)
     run_command_requested = Signal(str)
+    # Язык изменён — нужно повторить перевод интерфейса
+    language_changed = Signal(str)
 
     _LAYERS_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "model_layers.json")
 
@@ -83,14 +89,14 @@ class ConfigWidget(QWidget):
         left_top_layout.setContentsMargins(0, 0, 10, 0)
         left_top_layout.setSpacing(6)
 
-        model_name_label = QLabel("Модель:")
+        self.model_name_label = QLabel(locale.translate('config.model_label'))
         self.model_name_edit = QLineEdit()
         self.model_name_edit.setReadOnly(True)
 
         self.size_label = QLabel()
         self.size_label.setStyleSheet("color: grey; font-size: 12px;")
 
-        left_top_layout.addWidget(model_name_label)
+        left_top_layout.addWidget(self.model_name_label)
         left_top_layout.addWidget(self.model_name_edit, 1)  # Поле ввода забирает ВСЁ доступное пространство
         left_top_layout.addWidget(self.size_label)
 
@@ -103,7 +109,8 @@ class ConfigWidget(QWidget):
         self.button_modfiles = QPushButton("Обзор")
         self.button_modfiles.clicked.connect(self._browse_mods_directory)
 
-        self.mods_path_label = QLabel(f"Каталог: {self.mods_path}")
+        self.mods_path_label = QLabel()
+        self._update_mods_path_label()
         self.mods_path_label.setStyleSheet("color: grey; font-size: 12px;")
         self.mods_path_label.setToolTip(self.mods_path)
         self.mods_path_label.setMaximumWidth(200)
@@ -117,6 +124,22 @@ class ConfigWidget(QWidget):
         top_layout.addWidget(right_top_part, CONST_LAYOUT_WIDTH_TOP_RIGHT)
         layout.addWidget(top_widget)
 
+        # --- СТРОКА ВЫБОРА ЯЗЫКА ---
+        language_row = QWidget()
+        language_row_layout = QHBoxLayout(language_row)
+        language_row_layout.setContentsMargins(0, 0, 0, 0)
+        language_row_layout.setSpacing(6)
+
+        self.language_label = QLabel(locale.translate('config.language_label'))
+        self.language_combo = QComboBox()
+        self._populate_language_combo()
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+
+        language_row_layout.addWidget(self.language_label)
+        language_row_layout.addWidget(self.language_combo)
+        language_row_layout.addStretch()
+        layout.addWidget(language_row)
+
         # --- ГЛАВНЫЙ СПЛИТТЕР (Дальше код остается без изменений) ---
         self.h_splitter = QSplitter(Qt.Horizontal)
 
@@ -125,7 +148,11 @@ class ConfigWidget(QWidget):
 
         self.output_table = QTableWidget()
         self.output_table.setColumnCount(3)
-        self.output_table.setHorizontalHeaderLabels(["Имя файла .mod", "Папка", "Дата (модификации)"])
+        self.output_table.setHorizontalHeaderLabels([
+            locale.translate('config.col_name'),
+            locale.translate('config.col_folder'),
+            locale.translate('config.col_date'),
+        ])
         self.output_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.output_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.output_table.setSelectionMode(QTableWidget.SingleSelection)
@@ -152,10 +179,10 @@ class ConfigWidget(QWidget):
         buttons_layout.setContentsMargins(0, 5, 0, 0)
         buttons_layout.setSpacing(6)
 
-        self.button_clear = QPushButton("Сбросить")
-        self.button_get = QPushButton("Загрузить")
-        self.button_save = QPushButton("Сохранить")
-        self.button_manage = QPushButton("Сервер")
+        self.button_clear = QPushButton(locale.translate('config.clear'))
+        self.button_get = QPushButton(locale.translate('config.load'))
+        self.button_save = QPushButton(locale.translate('config.save'))
+        self.button_manage = QPushButton(locale.translate('config.manage'))
 
         self.button_clear.clicked.connect(self.on_clear_clicked)
         self.button_get.clicked.connect(self.on_get_clicked)
@@ -180,28 +207,28 @@ class ConfigWidget(QWidget):
         self.left_v_splitter.setSizes([CONST_LAYOUT_WIDTH_LEFT_VERTICAL, CONST_LAYOUT_WIDTH_RIGHT_VERTICAL])
         self.right_v_splitter.setSizes([CONST_LAYOUT_WIDTH_RIGHT_SPLITTER, CONST_LAYOUT_WIDTH_BOTTOM])
 
-        self.model_name_edit.setPlaceholderText("Имя выбранной .gguf модели")
-        self.text_edit_left.setPlaceholderText("Содержимое .mod (только чтение)")
-        self.text_edit_right.setPlaceholderText("Редактируемое содержимое")
+        self.model_name_edit.setPlaceholderText(locale.translate('config.model_placeholder'))
+        self.text_edit_left.setPlaceholderText(locale.translate('config.left_placeholder'))
+        self.text_edit_right.setPlaceholderText(locale.translate('config.right_placeholder'))
 
     def _browse_mods_directory(self):
         directory = QFileDialog.getExistingDirectory(
-            self, "Выбрать каталог с .mod файлами", self.mods_path or ""
+            self, locale.translate('config.browse_mods_title'), self.mods_path or ""
         )
         if not directory:
             return
 
         self.mods_path = directory
         # Обновляем отображение пути
-        self.mods_path_label.setText(f"Каталог: {self.mods_path}")
+        self._update_mods_path_label()
         try:
             from dotenv import set_key
             set_key(self._env_path, "LAST_MODS_PATH", self.mods_path)
             logging.info(f"[CW] Каталог модов сохранён в .env: {self.mods_path}")
         except Exception as e:
             logging.error(f"[CW] Не удалось сохранить LAST_MODS_PATH в .env: {e}")
-            QMessageBox.warning(self, "Предупреждение",
-                                 f"Каталог выбран, но не сохранён в .env:\n{e}")
+            QMessageBox.warning(self, locale.translate('common.warning'),
+                                 f"{locale.translate('config.not_saved')}\n{e}")
 
         self.start_scan()
 
@@ -260,7 +287,7 @@ class ConfigWidget(QWidget):
             self.text_edit_left.clear()
             self.text_edit_right.clear()
             self._current_mod_file_path = None
-            self.button_get.setText("Загрузить")
+            self.button_get.setText(locale.translate('config.load'))
             self.button_get.setEnabled(False)
         else:
             # Если файла настроек нет — генерируем полный шаблон
@@ -271,7 +298,7 @@ class ConfigWidget(QWidget):
             content = self._generate_auto_config(model_name, self.model_size)
             self.text_edit_left.setPlainText(content)
 
-            self.button_get.setText("Загрузить")
+            self.button_get.setText(locale.translate('config.load'))
             self.button_get.setEnabled(True)
 
     # ---------------------------------------------------------
@@ -435,16 +462,16 @@ class ConfigWidget(QWidget):
                 content = f.read()
             self.text_edit_left.setPlainText(content)
             self._current_mod_file_path = mod_path
-            self.button_get.setText("Загрузить")
+            self.button_get.setText(locale.translate('config.load'))
             self.button_get.setEnabled(True)
         except Exception as e:
             self.text_edit_left.setPlainText(str(e))
 
     def on_get_clicked(self):
         mode = self.button_get.text()
-        if mode == "Загрузить":
+        if mode == locale.translate('config.load'):
             self.text_edit_right.setPlainText(self.text_edit_left.toPlainText())
-        elif mode == "Автоподбор":
+        elif mode == locale.translate('config.autopick'):
             self._perform_autopick()
 
     def on_clear_clicked(self):
@@ -457,7 +484,7 @@ class ConfigWidget(QWidget):
     def on_save_config_clicked(self):
         content_to_save = self.text_edit_right.toPlainText().strip()
         if not content_to_save:
-            QMessageBox.warning(self, "Ошибка", "Нет данных для сохранения.")
+            QMessageBox.warning(self, locale.translate('common.error'), locale.translate('config.no_data'))
             return
 
         default_name = "config"
@@ -469,23 +496,76 @@ class ConfigWidget(QWidget):
                 default_name = os.path.splitext(model_name)[0]
 
         if not self.mods_path:
-            QMessageBox.warning(self, "Ошибка", "Не выбран каталог с модами.")
+            QMessageBox.warning(self, locale.translate('common.error'), locale.translate('config.no_path'))
             return
         initial_path = os.path.join(self.mods_path, f"{default_name}.mod")
         file_path, accepted = QFileDialog.getSaveFileName(
-            self, "Сохранить конфигурацию (.mod)", initial_path, "MOD Files (*.mod);;All Files (*)"
+            self, locale.translate('config.save_title'), initial_path,
+            f"{locale.translate('config.save_filter')};;{locale.translate('config.all_files')}"
         )
         if not accepted:
             return
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content_to_save)
-            QMessageBox.information(self, "Успех", "Файл успешно сохранён.")
+            QMessageBox.information(self, locale.translate('common.success'), locale.translate('config.saved_ok'))
             self.start_scan()
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка сохранения", str(e))
+            QMessageBox.critical(self, locale.translate('common.error'), str(e))
 
     def on_manage_clicked(self):
         command_string = self.text_edit_right.toPlainText().strip()
         if command_string:
             self.run_command_requested.emit(command_string)
+
+    # ---------------------------------------------------------
+    #  Локализация интерфейса
+    # ---------------------------------------------------------
+    def _update_mods_path_label(self):
+        self.mods_path_label.setText(f"{locale.translate('config.dir_prefix')} {self.mods_path}")
+
+    def _populate_language_combo(self):
+        """Заполняет комбо языков переведёнными названиями и выделяет текущий."""
+        self.language_combo.blockSignals(True)
+        self.language_combo.clear()
+        for code, name_key in (("ru", "config.lang_ru"), ("en", "config.lang_en"), ("es", "config.lang_es")):
+            self.language_combo.addItem(locale.translate(name_key), code)
+        index = self.language_combo.findData(locale.current_language)
+        if index >= 0:
+            self.language_combo.setCurrentIndex(index)
+        self.language_combo.blockSignals(False)
+
+    @Slot(int)
+    def _on_language_changed(self, _index: int):
+        code = self.language_combo.currentData()
+        if not code or code == locale.current_language:
+            return
+        locale.load_locale(code)
+        set_key(self._env_path, "LANGUAGE", code)
+        self.language_changed.emit(code)
+
+    def retranslate(self):
+        self.language_label.setText(locale.translate('config.language_label'))
+        self.model_name_label.setText(locale.translate('config.model_label'))
+        self.button_modfiles.setText(locale.translate('config.browse'))
+        self._update_mods_path_label()
+        self.button_clear.setText(locale.translate('config.clear'))
+        self.button_get.setText(locale.translate('config.load'))
+        self.button_save.setText(locale.translate('config.save'))
+        self.button_manage.setText(locale.translate('config.manage'))
+
+        self.output_table.setHorizontalHeaderLabels([
+            locale.translate('config.col_name'),
+            locale.translate('config.col_folder'),
+            locale.translate('config.col_date'),
+        ])
+
+        self.model_name_edit.setPlaceholderText(locale.translate('config.model_placeholder'))
+        self.text_edit_left.setPlaceholderText(locale.translate('config.left_placeholder'))
+        self.text_edit_right.setPlaceholderText(locale.translate('config.right_placeholder'))
+
+        # Повторно показываем перевод языков в комбо.
+        # _populate_language_combo() уже выделяет current_language с
+        # заблокированными сигналами, поэтому перекладирование через
+        # retranslate() не запускает повторную загрузку языка.
+        self._populate_language_combo()

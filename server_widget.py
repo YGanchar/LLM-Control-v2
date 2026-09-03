@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 from services.ssh_setup import SSHSetupHelper
 from services.ssh_manager import SSHManager
 
+from locale_manager import locale
+
 
 def _resolve_env_path() -> str:
     """.env рядом с исполняемым файлом (frozen-сборка) или со скриптом (Thonny/venv)."""
@@ -48,12 +50,12 @@ if not SSHManager.get_ssh_key_path():
 # (никаких изменений в systemd/llmctl для порта 8080 не требуется).
 INSTANCES = {
     "8080": {
-        "label": "Модель 1 (порт 8080, автостарт)",
+        "label_key": "server.instance_1",
         "config_path": os.getenv("DEFAULT_CONFIG_PATH", "/media/rtx-storage/llama-mode.conf"),
         "llmctl_suffix": "",
     },
     "8081": {
-        "label": "Модель 2 (порт 8081, вручную, GPU1)",
+        "label_key": "server.instance_2",
         "config_path": os.getenv("SECOND_CONFIG_PATH", "/media/rtx-storage/llama-mode-8081.conf"),
         "llmctl_suffix": " 8081",
     },
@@ -74,13 +76,16 @@ class ServerControlWidget(QWidget):
 
         # Переключатель инстанса - к какой модели относятся кнопки ниже
         instance_layout = QHBoxLayout()
-        instance_layout.addWidget(QLabel("Управляем:"))
+        self.controlled_label = QLabel(locale.translate('server.managing'))
+        instance_layout.addWidget(self.controlled_label)
         self.instance_group = QButtonGroup(self)
+        self.instance_radios = {}
         for key, info in INSTANCES.items():
-            rb = QRadioButton(info["label"])
+            rb = QRadioButton(locale.translate(info["label_key"]))
             rb.setChecked(key == self.current_instance)
             rb.toggled.connect(lambda checked, k=key: self._on_instance_changed(k, checked))
             self.instance_group.addButton(rb)
+            self.instance_radios[key] = rb
             instance_layout.addWidget(rb)
         instance_layout.addStretch()
         main_layout.addLayout(instance_layout)
@@ -92,7 +97,7 @@ class ServerControlWidget(QWidget):
         self.server_log_text_edit = QTextEdit()
         self.server_log_text_edit.setReadOnly(True)
         self.server_log_text_edit.setFont(QFont("DejaVu Sans Mono", 10))
-        self.server_log_text_edit.setPlaceholderText("Здесь будут отображаться логи, статус или конфигурация сервера...")
+        self.server_log_text_edit.setPlaceholderText(locale.translate('server.log_placeholder'))
 
         # Нижний виджет-контейнер, объединяющий поле ввода и цветные кнопки
         bottom_container = QWidget()
@@ -103,16 +108,16 @@ class ServerControlWidget(QWidget):
         # Поле конфигурации
         self.command_text_edit = QTextEdit()
         self.command_text_edit.setFont(QFont("DejaVu Sans Mono", 10))
-        self.command_text_edit.setPlaceholderText("Вставьте конфигурацию. Строки, начинающиеся с INFO:, будут сохранены только локально.")
+        self.command_text_edit.setPlaceholderText(locale.translate('server.cmd_placeholder'))
 
         # Вертикальный блок для цветных кнопок питания (справа от поля ввода)
         power_buttons_layout = QVBoxLayout()
         power_buttons_layout.setContentsMargins(0, 0, 0, 0)
         power_buttons_layout.setSpacing(8)
-        self.btn_wol = QPushButton("Включить (WoL)")
+        self.btn_wol = QPushButton(locale.translate('server.wol'))
         self.btn_wol.setStyleSheet("background-color: #1e7e34; color: white; font-weight: bold; border-radius: 4px;")
         self.btn_wol.setFixedSize(130, 36)  # Компактный фиксированный размер
-        self.btn_shutdown = QPushButton("Выключить (SSH)")
+        self.btn_shutdown = QPushButton(locale.translate('server.shutdown'))
         self.btn_shutdown.setStyleSheet("background-color: #bd2130; color: white; font-weight: bold; border-radius: 4px;")
         self.btn_shutdown.setFixedSize(130, 36)
         power_buttons_layout.addWidget(self.btn_wol)
@@ -133,18 +138,20 @@ class ServerControlWidget(QWidget):
         self.control_button_layout.setContentsMargins(0, 2, 0, 2)
         self.control_button_layout.setSpacing(6)
         button_specs = [
-            ("apply", "Применить", self.set_config_file),
-            ("start", "Старт", self.start_llama_server),
-            ("stop", "Стоп", self.stop_llama_server),
-            ("restart", "Перезапуск", self.restart_llama_server),
-            ("status", "Статус", self.show_server_status),
-            ("config", "Конфиг", self.show_llama_mode_conf),
-            ("logs", "Логи", self.show_server_logs)
+            ("apply", "common.apply", self.set_config_file),
+            ("start", "common.start", self.start_llama_server),
+            ("stop", "common.stop", self.stop_llama_server),
+            ("restart", "common.restart", self.restart_llama_server),
+            ("status", "common.status", self.show_server_status),
+            ("config", "common.config", self.show_llama_mode_conf),
+            ("logs", "common.logs", self.show_server_logs)
         ]
-        for key, text, handler in button_specs:
-            btn = QPushButton(text)
+        self.control_buttons = {}
+        for key, text_key, handler in button_specs:
+            btn = QPushButton(locale.translate(text_key))
             btn.clicked.connect(handler)
             btn.setFixedHeight(30)  # Исправлено с setHeight
+            self.control_buttons[key] = btn
             self.control_button_layout.addWidget(btn)
         main_layout.addLayout(self.control_button_layout)
 
@@ -160,11 +167,13 @@ class ServerControlWidget(QWidget):
 
     def _append_system_msg(self, msg: str):
         """Вывод системных уведомлений о питании в лог-панель"""
-        self.server_log_text_edit.append(f"[Питание]: {msg}")
+        self.server_log_text_edit.append(f"{locale.translate('log.power')} {msg}")
         self.server_log_text_edit.ensureCursorVisible()
 
     def _trigger_power_action(self, method, name):
-        self.server_log_text_edit.append(f"[Питание]: Выполнение команды {name}...")
+        self.server_log_text_edit.append(
+            f"{locale.translate('log.power')} {locale.translate('server.power_executing')} {name}..."
+        )
         method()
 
     def update_command_display(self, command_string):
@@ -173,7 +182,9 @@ class ServerControlWidget(QWidget):
     def _on_instance_changed(self, key, checked):
         if checked:
             self.current_instance = key
-            self.server_log_text_edit.append(f"[Система]: Переключено на {INSTANCES[key]['label']}")
+            self.server_log_text_edit.append(
+                f"{locale.translate('log.system')} Переключено на {locale.translate(INSTANCES[key]['label_key'])}"
+            )
 
     def stop_current_stream(self):
         if self.current_stream_process and self.current_stream_process.state() == QProcess.Running:
@@ -186,13 +197,12 @@ class ServerControlWidget(QWidget):
         action_arg относится к текущему выбранному через радио-кнопки инстансу."""
         # Проверка SSH-ключа перед выполнением — через единый менеджер
         if not SSHManager.get_ssh_key_path():
-            reply = QMessageBox.question(
-                self, "SSH-ключ не найден",
-                "Беспарольный доступ не настроен. Команда не может быть выполнена.\n\n"
-                "Хотите открыть мастер настройки?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply == QMessageBox.Yes:
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle(locale.translate('server.ssh_key_missing'))
+            dialog.setText(locale.translate('server.ssh_key_missing_msg'))
+            btn_yes = dialog.addButton(locale.translate('common.yes'), QMessageBox.AcceptRole)
+            dialog.addButton(locale.translate('common.no'), QMessageBox.DestructiveRole)
+            if dialog.exec() == btn_yes:
                 self._show_ssh_setup_wizard()
             return
 
@@ -201,7 +211,9 @@ class ServerControlWidget(QWidget):
         full_action = f"{action_arg}{suffix}"
         if clear_output:
             self.server_log_text_edit.clear()
-        self.server_log_text_edit.append(f"[Система]: Отправка команды 'llmctl {full_action}' на {SSH_HOST}...\n")
+        self.server_log_text_edit.append(
+            f"{locale.translate('server.cmd_sending').format(full_action=full_action, ssh_host=SSH_HOST)}\n"
+        )
 
         proc = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
@@ -224,9 +236,9 @@ class ServerControlWidget(QWidget):
             # Мониторинг фатальных ошибок инференса и железа
             fatal_keywords = ["out of memory", "cuda error", "kv cache full", "failed to allocate", "assert"]
             if any(keyword in lower_data for keyword in fatal_keywords):
-                self.server_log_text_edit.insertPlainText(f"\n[КРИТИЧЕСКАЯ ОШИБКА]: {data}\n")
+                self.server_log_text_edit.insertPlainText(f"\n{locale.translate('log.critical')} {data}\n")
             else:
-                self.server_log_text_edit.insertPlainText(f"\n[Инфо]: {data}")
+                self.server_log_text_edit.insertPlainText(f"\n{locale.translate('log.info')} {data}")
             self.server_log_text_edit.ensureCursorVisible()
 
         proc.readyReadStandardOutput.connect(read_stdout)
@@ -239,12 +251,12 @@ class ServerControlWidget(QWidget):
         )
         if not ssh_args:
             # Менеджер не нашёл ключ — это уже обработано выше, но на всякий случай
-            self.server_log_text_edit.append("[Ошибка]: SSH-ключ не найден, команда отменена.")
+            self.server_log_text_edit.append(f"{locale.translate('log.error')} {locale.translate('server.cmd_cancelled')}")
             return
 
         proc.start("ssh", ssh_args)
         if proc.state() == QProcess.NotRunning:
-            self.server_log_text_edit.append(f"[Ошибка]: Не удалось запустить SSH-соединение")
+            self.server_log_text_edit.append(f"{locale.translate('log.error')} {locale.translate('server.cmd_start_failed')}")
             return
 
         if is_stream:
@@ -257,15 +269,12 @@ class ServerControlWidget(QWidget):
         показывается в том же окне, а не в новом.
         """
         dialog = QMessageBox(self)
-        dialog.setWindowTitle("Настройка SSH-доступа")
-        dialog.setText("Беспарольный SSH-доступ не настроен.")
-        dialog.setInformativeText(
-            "Для работы приложения необходим беспарольный доступ к серверу.\n\n"
-            "Что вы хотите сделать?"
-        )
-        btn_gen = dialog.addButton("Сгенерировать ключ", QMessageBox.AcceptRole)
-        btn_copy = dialog.addButton("Скопировать ключ на сервер", QMessageBox.AcceptRole)
-        btn_inst = dialog.addButton("Показать инструкцию sudoers", QMessageBox.AcceptRole)
+        dialog.setWindowTitle(locale.translate('server.ssh_title'))
+        dialog.setText(locale.translate('server.ssh_text'))
+        dialog.setInformativeText(locale.translate('server.ssh_inform'))
+        btn_gen = dialog.addButton(locale.translate('server.ssh_btn_gen'), QMessageBox.AcceptRole)
+        btn_copy = dialog.addButton(locale.translate('server.ssh_btn_copy'), QMessageBox.AcceptRole)
+        btn_inst = dialog.addButton(locale.translate('server.ssh_btn_inst'), QMessageBox.AcceptRole)
         dialog.addButton(QMessageBox.Close)
         dialog.exec()
 
@@ -290,11 +299,12 @@ class ServerControlWidget(QWidget):
         dialog.exec()
 
     def confirm_action(self, action_title, message):
-        reply = QMessageBox.question(
-            self, action_title, message,
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        return reply == QMessageBox.Yes
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(action_title)
+        dialog.setText(message)
+        btn_yes = dialog.addButton(locale.translate('common.yes'), QMessageBox.AcceptRole)
+        dialog.addButton(locale.translate('common.no'), QMessageBox.DestructiveRole)
+        return dialog.exec() == btn_yes
 
     def _validate_config(self, content: str) -> list:
         """Проверки на конкретные способы сломать конфиг, с которыми уже сталкивались:
@@ -371,17 +381,17 @@ class ServerControlWidget(QWidget):
     def set_config_file(self):
         raw_content = self.command_text_edit.toPlainText()
         if not raw_content.strip():
-            QMessageBox.warning(self, "Внимание", "Конфигурация пуста. Нечего сохранять.")
+            QMessageBox.warning(self, locale.translate('common.warning'), locale.translate('server.config_empty'))
             return
         issues = self._validate_config(raw_content)
         if issues:
             details = "\n".join(f"• {i}" for i in issues)
-            reply = QMessageBox.warning(
-                self, "Найдены потенциальные проблемы",
-                f"{details}\n\nВсё равно сохранить как есть?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle(locale.translate('server.problems_title'))
+            dialog.setText(f"{details}\n\n{locale.translate('server.problems_keep')}")
+            btn_yes = dialog.addButton(locale.translate('common.yes'), QMessageBox.AcceptRole)
+            dialog.addButton(locale.translate('common.no'), QMessageBox.DestructiveRole)
+            if dialog.exec() != btn_yes:
                 return
         filtered_lines = []
         info_count = 0
@@ -396,27 +406,46 @@ class ServerControlWidget(QWidget):
             with open(target_path, 'w') as file:
                 file.write(filtered_content)
             self.server_log_text_edit.clear()
-            msg = f"[Система]: Конфигурация сохранена в {target_path} ({INSTANCES[self.current_instance]['label']})\n"
+            msg = f"{locale.translate('log.system')} {locale.translate('server.saved_ok').format(path=target_path, instance=locale.translate(INSTANCES[self.current_instance]['label_key']))}\n"
             if info_count > 0:
-                msg += f"[Система]: Из файла конфигурации локально исключено {info_count} строк(и) заметок INFO:\n"
-            msg += "Изменения вступят в силу после Старта или Перезапуска сервера."
+                msg += f"{locale.translate('log.system')} {locale.translate('server.saved_info').format(count=info_count)}\n"
+            msg += locale.translate('server.saved_notice')
             self.server_log_text_edit.setText(msg)
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось записать файл: {str(e)}")
+            QMessageBox.critical(self, locale.translate('common.error'), f"{locale.translate('server.write_error')} {str(e)}")
 
     def _instance_label(self):
-        return INSTANCES[self.current_instance]["label"]
+        return locale.translate(INSTANCES[self.current_instance]["label_key"])
+
+    def retranslate(self):
+        """Перекрасить весь виджет без пересоздания виджетов (смена языка)."""
+        self.controlled_label.setText(locale.translate('server.managing'))
+        for key, rb in self.instance_radios.items():
+            rb.setText(locale.translate(INSTANCES[key]["label_key"]))
+        self.btn_wol.setText(locale.translate('server.wol'))
+        self.btn_shutdown.setText(locale.translate('server.shutdown'))
+        for key, btn in self.control_buttons.items():
+            btn.setText(locale.translate(f"common.{key}"))
 
     def start_llama_server(self):
-        if self.confirm_action("Запуск сервера", f"Запустить {self._instance_label()}?"):
+        if self.confirm_action(
+            locale.translate('server.confirm_start_title'),
+            locale.translate('server.confirm_start_msg').format(instance=self._instance_label())
+        ):
             self.run_async_ssh_cmd("start")
 
     def stop_llama_server(self):
-        if self.confirm_action("Остановка сервера", f"Остановить {self._instance_label()}?"):
+        if self.confirm_action(
+            locale.translate('server.confirm_stop_title'),
+            locale.translate('server.confirm_stop_msg').format(instance=self._instance_label())
+        ):
             self.run_async_ssh_cmd("stop")
 
     def restart_llama_server(self):
-        if self.confirm_action("Перезапуск сервера", f"Перезапустить {self._instance_label()}?"):
+        if self.confirm_action(
+            locale.translate('server.confirm_restart_title'),
+            locale.translate('server.confirm_restart_msg').format(instance=self._instance_label())
+        ):
             self.run_async_ssh_cmd("restart")
 
     def show_server_status(self):

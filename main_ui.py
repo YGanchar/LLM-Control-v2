@@ -26,6 +26,11 @@ _env_path = _resolve_env_path()
 if os.path.exists(_env_path):
     load_dotenv(_env_path)
 
+from locale_manager import locale
+
+# Язык интерфейса берём из .env (LANGUAGE=ru/en/es); по умолчанию — английский
+locale.load_locale(os.getenv("LANGUAGE"))
+
 from services.system_monitor import RemoteMonitorThread
 from services.server_control import ServerControl
 from scanner_widget import ScannerWidget
@@ -37,6 +42,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+
+        # Последние полученные метрики (для повторного применения при смене языка)
+        self._last_stats: Optional[Dict[str, Any]] = None
 
         # 1. Инициализируем фоновые сервисы и запускаем поток мониторинга (один раз)
         self.system_monitor: Optional[RemoteMonitorThread] = RemoteMonitorThread()
@@ -61,14 +69,14 @@ class MainWindow(QMainWindow):
         self.scanner_tab_layout = QVBoxLayout(self.scanner_tab)
         self.scanner_widget = ScannerWidget(self)
         self.scanner_tab_layout.addWidget(self.scanner_widget)
-        self.tab_widget.addTab(self.scanner_tab, "Сканер Моделей")
+        self.tab_widget.addTab(self.scanner_tab, locale.translate('tab.models'))
 
         # Таб 2: Параметры модели
         self.config_tab = QWidget()
         self.config_tab_layout = QVBoxLayout(self.config_tab)
         self.config_widget = ConfigWidget(self)
         self.config_tab_layout.addWidget(self.config_widget)
-        self.tab_widget.addTab(self.config_tab, "Параметры модели")
+        self.tab_widget.addTab(self.config_tab, locale.translate('tab.params'))
 
         # Таб 3: Управление сервером
         self.control_tab = QWidget()
@@ -77,7 +85,7 @@ class MainWindow(QMainWindow):
         # Важно: создаем ServerControlWidget
         self.control_widget = ServerControlWidget(self)
         self.control_tab_layout.addWidget(self.control_widget)
-        self.tab_widget.addTab(self.control_tab, "Сервер RTX")
+        self.tab_widget.addTab(self.control_tab, locale.translate('tab.server'))
 
         # 2. Передаем запущенный поток мониторинга внутрь созданного виджета сервера
         self.control_widget.set_monitor_thread(self.system_monitor)
@@ -115,6 +123,7 @@ class MainWindow(QMainWindow):
         # Добавляем строку статуса в самый низ главного окна
         self.main_layout.addLayout(self.system_info_layout)
 
+        self._set_placeholder_status()
         self._init_metrics_labels()
         self._connect_signals()
         # По умолчанию открываем вкладку «Параметры модели» — там работа с пресетами
@@ -136,6 +145,9 @@ class MainWindow(QMainWindow):
         self.scanner_widget.scan_finished.connect(self._on_scan_finished)
         self.scanner_widget.model_selected.connect(self._on_model_selected)
         self.config_widget.run_command_requested.connect(self._on_command_requested)
+
+        # Смена языка в ConfigWidget → перекладываем весь интерфейс
+        self.config_widget.language_changed.connect(self.retranslate_ui)
 
     def _on_command_requested(self, command_string: str) -> None:
         """Обработка конфигурационной команды, полученной из ConfigWidget."""
@@ -181,33 +193,62 @@ class MainWindow(QMainWindow):
         }
 
     def _handle_metrics_update(self, stats: Dict[str, Any]) -> None:
+        self._last_stats = stats
+        self._apply_status_labels(stats)
+
+    def _set_placeholder_status(self) -> None:
+        """Заполняем статус-бар текстами-заполнителями по текущему языку."""
+        self.cpu_label.setText(f"{locale.translate('status.cpu')} --")
+        self.ram_label.setText(f"{locale.translate('status.ram')} --")
+        self.llama_label.setText(f"{locale.translate('status.llama')} --")
+        self.llama2_label.setText(f"{locale.translate('status.llama2')} --")
+        self.gpu_label.setText(f"{locale.translate('status.gpu')} --")
+
+    def _apply_status_labels(self, stats: Dict[str, Any]) -> None:
+        """Применяет метрики к статус-бару, локализуя только префиксы (данные — нет)."""
         try:
             system = stats["system"]
             instances = stats.get("instances", {})
             gpus = stats.get("gpu", [])
 
-            self.cpu_label.setText(f"SRV CPU: {system['cpu']:.1f}%")
-            self.ram_label.setText(f"SRV RAM: {system['ram']:.1f}%")
+            self.cpu_label.setText(f"{locale.translate('status.cpu')}{system['cpu']:.1f}%")
+            self.ram_label.setText(f"{locale.translate('status.ram')}{system['ram']:.1f}%")
 
             inst_8080 = instances.get(8080, {})
             if inst_8080.get("running"):
-                self.llama_label.setText(f"8080: ACTIVE | {inst_8080.get('vram_gb', 0.0):.2f} GB")
+                self.llama_label.setText(f"{locale.translate('status.llama')}ACTIVE | {inst_8080.get('vram_gb', 0.0):.2f} GB")
             else:
-                self.llama_label.setText("8080: OFFLINE")
+                self.llama_label.setText(f"{locale.translate('status.llama')}OFFLINE")
 
             inst_8081 = instances.get(8081, {})
             if inst_8081.get("running"):
-                self.llama2_label.setText(f"8081: ACTIVE | {inst_8081.get('vram_gb', 0.0):.2f} GB")
+                self.llama2_label.setText(f"{locale.translate('status.llama2')}ACTIVE | {inst_8081.get('vram_gb', 0.0):.2f} GB")
             else:
-                self.llama2_label.setText("8081: OFFLINE")
+                self.llama2_label.setText(f"{locale.translate('status.llama2')}OFFLINE")
 
             if gpus:
                 parts = [f"GPU{g['index']}: {g['used_gb']:.1f}/{g['total_gb']:.1f}GB {g['power_w']}W" for g in gpus]
                 self.gpu_label.setText(" | ".join(parts))
             else:
-                self.gpu_label.setText("GPU: --")
+                self.gpu_label.setText(f"{locale.translate('status.gpu')} --")
         except Exception as e:
             logging.error(f"[MAIN_UI] Ошибка отображения метрик: {e}")
+
+    def retranslate_ui(self) -> None:
+        """Перекладываем интерфейс при смене языка без пересоздания виджетов."""
+        self.tab_widget.setTabText(0, locale.translate('tab.models'))
+        self.tab_widget.setTabText(1, locale.translate('tab.params'))
+        self.tab_widget.setTabText(2, locale.translate('tab.server'))
+
+        # Перекладываем статус-бар: сначала заполнитель, затем последние метрики (если есть)
+        self._set_placeholder_status()
+        if self._last_stats:
+            self._apply_status_labels(self._last_stats)
+
+        # Перекладываем вложенные виджеты
+        self.scanner_widget.retranslate()
+        self.config_widget.retranslate()
+        self.control_widget.retranslate()
 
     def _on_model_selected(self, full_path: str, size_gb: float) -> None:
         logging.info(f"[MAIN_UI] Выбрана модель: {os.path.basename(full_path)}")
