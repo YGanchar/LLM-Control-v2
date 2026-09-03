@@ -99,6 +99,20 @@ Passwords are not supported.
 Full step-by-step guide — in [`docs/USAGE.md`](docs/USAGE.md).
 (Russian version — [`docs/ИНСТРУКЦИЯ.md`](docs/ИНСТРУКЦИЯ.md).)
 
+## Screenshots
+
+Model scanner (tab 1):
+
+![Model scanner](screenshot_scanner.png)
+
+Model parameters — a `.mod` preset (tab 2):
+
+![Model parameters](screenshot_config.png)
+
+Server control and GPU monitoring (tab 3):
+
+![Server control](screenshot_server.png)
+
 ## Server deployment
 
 Install `llama-server` and `llmctl`, configure `sudoers` and NFS — automated by
