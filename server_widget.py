@@ -11,6 +11,7 @@ import os
 import sys
 import logging
 from dotenv import load_dotenv
+from services.ssh_setup import SSHSetupHelper
 
 def _resolve_env_path() -> str:
     """.env рядом с исполняемым файлом (frozen-сборка) или со скриптом (Thonny/venv)."""
@@ -277,7 +278,12 @@ class ServerControlWidget(QWidget):
             self.current_stream_process = proc
 
     def _show_ssh_setup_wizard(self):
-        """Открывает диалог настройки SSH."""
+        """Открывает диалог настройки беспарольного SSH-доступа к серверу.
+
+        Все действия выполняются прямо из диалога (по нажатию кнопки),
+        поэтому достаточно одного exec() — после каждого действия статус
+        показывается в том же окне, а не в новом.
+        """
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Настройка SSH-доступа")
         dialog.setText("Беспарольный SSH-доступ не настроен.")
@@ -285,29 +291,29 @@ class ServerControlWidget(QWidget):
             "Для работы приложения необходим беспарольный доступ к серверу.\n\n"
             "Что вы хотите сделать?"
         )
-        
+
         btn_gen = dialog.addButton("Сгенерировать ключ", QMessageBox.AcceptRole)
         btn_copy = dialog.addButton("Скопировать ключ на сервер", QMessageBox.AcceptRole)
-        btn_inst = dialog.addButton("Показать инструкцию", QMessageBox.AcceptRole)
-        dialog.addButton(QMessageBox.Cancel)
-        
+        btn_inst = dialog.addButton("Показать инструкцию sudoers", QMessageBox.AcceptRole)
+        dialog.addButton(QMessageBox.Close)
+
         dialog.exec()
-        
+
         if dialog.clickedButton() == btn_gen:
             result = SSHSetupHelper.generate_ssh_key()
-            dialog.setInformativeText(result)
-            dialog.exec()
         elif dialog.clickedButton() == btn_copy:
             result = SSHSetupHelper.copy_key_to_host(
                 os.getenv("SERVER_USER", "yuri"),
                 os.getenv("SSH_HOST", "rtx")
             )
-            dialog.setInformativeText(result)
-            dialog.exec()
         elif dialog.clickedButton() == btn_inst:
             instructions = SSHSetupHelper.get_sudoers_instructions()
             dialog.setDetailedText(instructions)
-            dialog.exec()
+        else:
+            return  # Отмена/закрытие — ничего не делаем
+
+        dialog.setInformativeText(result)
+        dialog.exec()
 
     def confirm_action(self, action_title, message):
         reply = QMessageBox.question(
