@@ -202,7 +202,8 @@ class ServerControlWidget(QWidget):
             dialog.setText(locale.translate('server.ssh_key_missing_msg'))
             btn_yes = dialog.addButton(locale.translate('common.yes'), QMessageBox.AcceptRole)
             dialog.addButton(locale.translate('common.no'), QMessageBox.DestructiveRole)
-            if dialog.exec() == btn_yes:
+            dialog.exec()
+            if dialog.clickedButton() is not btn_yes:
                 self._show_ssh_setup_wizard()
             return
 
@@ -304,7 +305,10 @@ class ServerControlWidget(QWidget):
         dialog.setText(message)
         btn_yes = dialog.addButton(locale.translate('common.yes'), QMessageBox.AcceptRole)
         dialog.addButton(locale.translate('common.no'), QMessageBox.DestructiveRole)
-        return dialog.exec() == btn_yes
+        # exec() возвращает код QDialog, а не кнопку: сравнение с btn_yes
+        # всегда давало False и подтверждение молча игнорировалось.
+        dialog.exec()
+        return dialog.clickedButton() is btn_yes
 
     def _validate_config(self, content: str) -> list:
         """Проверки на конкретные способы сломать конфиг, с которыми уже сталкивались:
@@ -391,7 +395,8 @@ class ServerControlWidget(QWidget):
             dialog.setText(f"{details}\n\n{locale.translate('server.problems_keep')}")
             btn_yes = dialog.addButton(locale.translate('common.yes'), QMessageBox.AcceptRole)
             dialog.addButton(locale.translate('common.no'), QMessageBox.DestructiveRole)
-            if dialog.exec() != btn_yes:
+            dialog.exec()
+            if dialog.clickedButton() is not btn_yes:
                 return
         filtered_lines = []
         info_count = 0
