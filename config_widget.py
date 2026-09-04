@@ -259,7 +259,7 @@ class ConfigWidget(QWidget):
 
         self.model_name_edit.setText(model_name)
         self.model_size = model_size_gb * 1024  # Конвертируем в МБ
-        self.size_label.setText(f"{model_size_gb:.3f} ГБ")
+        self.size_label.setText(f"{model_size_gb:.3f} {locale.translate('config.gb')}")
 
         base = model_name.rsplit(".", 1)[0]
         mods = self._find_mods_for_base(base)
@@ -333,14 +333,6 @@ class ConfigWidget(QWidget):
             f'EXTRA="{extra_param}"'
         ]
         return "\n".join(lines) + "\n"
-
-    def _perform_autopick(self):
-        model_name = self.model_name_edit.text().strip()
-        if not model_name or self.model_size is None:
-            return
-        content = self._generate_auto_config(model_name, self.model_size)
-        self.text_edit_right.setPlainText(content)
-        self.text_edit_left.clear()
 
     def _is_hidden_path(self, path: str, base: str) -> bool:
         """True, если файл лежит в подпапке (на любом уровне вложенности),
@@ -450,17 +442,13 @@ class ConfigWidget(QWidget):
             self.text_edit_left.setPlainText(str(e))
 
     def on_get_clicked(self):
-        mode = self.button_get.text()
-        if mode == locale.translate('config.load'):
-            self.text_edit_right.setPlainText(self.text_edit_left.toPlainText())
-        elif mode == locale.translate('config.autopick'):
-            self._perform_autopick()
+        self.text_edit_right.setPlainText(self.text_edit_left.toPlainText())
 
     def on_clear_clicked(self):
         self.text_edit_left.clear()
         self.text_edit_right.clear()
         self._current_mod_file_path = None
-        self.button_get.setText("Загрузить")
+        self.button_get.setText(locale.translate('config.load'))
         self.button_get.setEnabled(False)
 
     def on_save_config_clicked(self):
@@ -508,6 +496,10 @@ class ConfigWidget(QWidget):
 
     def retranslate(self):
         self.model_name_label.setText(locale.translate('config.model_label'))
+        # Единица размера локализована; model_size хранится в МБ, 1024 —
+        # степень двойки, поэтому обратное деление даёт ровно исходное значение
+        if self.model_size is not None:
+            self.size_label.setText(f"{self.model_size / 1024:.3f} {locale.translate('config.gb')}")
         self.button_modfiles.setText(locale.translate('config.browse'))
         self._update_mods_path_label()
         self.button_clear.setText(locale.translate('config.clear'))

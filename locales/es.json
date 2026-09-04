@@ -60,6 +60,7 @@
     "scanner.model_placeholder": "Nombre del modelo .gguf seleccionado",
 
     "config.model_label": "Modelo:",
+    "config.model_placeholder": "Modelo no seleccionado",
     "config.browse": "Explorar",
     "config.dir_prefix": "Carpeta:",
     "config.gb": "GB",

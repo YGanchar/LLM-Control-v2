@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QTabWidget
 )
 from PySide6.QtGui import QFont, QCloseEvent  # QCloseEvent перенесен в QtGui
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import Signal
 
 def _resolve_env_path() -> str:
     """.env рядом с исполняемым файлом (frozen-сборка) или со скриптом (Thonny/venv)."""
@@ -134,12 +134,6 @@ class MainWindow(QMainWindow):
         # По умолчанию открываем вкладку «Параметры модели» — там работа с пресетами
         self.tab_widget.setCurrentIndex(0)
 
-    def _setup_timers(self) -> None:
-        self.system_update_timer = QTimer(self)
-        self.system_update_timer.setInterval(2000)
-        self.system_update_timer.timeout.connect(self._update_system_metrics)
-        self.system_update_timer.start()
-
     def _connect_signals(self) -> None:
         # Подключаем обработку полученных метрик от RemoteMonitorThread к интерфейсу главного окна
         if self.system_monitor:
@@ -165,9 +159,11 @@ class MainWindow(QMainWindow):
             last_scan_path = self.scanner_widget.current_scan_path
             last_save_path = self.scanner_widget.current_save_path
             last_model_path = getattr(self.scanner_widget, "last_selected_path", "")
-            set_key(".env", "LAST_SCAN_PATH", last_scan_path)
-            set_key(".env", "LAST_SAVE_PATH", last_save_path)
-            set_key(".env", "LAST_MODEL_PATH", last_model_path)
+            # Абсолютный путь (рядом со скриптом/бинарем), а не cwd: set_key
+            # иначе молча создаёт .env в текущей директории процесса.
+            set_key(_env_path, "LAST_SCAN_PATH", last_scan_path)
+            set_key(_env_path, "LAST_SAVE_PATH", last_save_path)
+            set_key(_env_path, "LAST_MODEL_PATH", last_model_path)
             logging.info("[MAIN_UI] Настройки успешно сохранены.")
         except Exception as e:
             logging.error(f"[MAIN_UI] Ошибка сохранения настроек: {e}")
@@ -180,6 +176,11 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         logging.info("[MAIN_UI] Закрытие приложения...")
+
+        # Стрим логов (ssh + journalctl -f) нужно гасить явно: QProcess при
+        # уничтожении объекта дочерний процесс не убивает — он остался бы
+        # висеть сиротой после закрытия приложения.
+        self.control_widget.stop_current_stream()
 
         # Безопасная остановка и дожидание завершения потока мониторинга
         if hasattr(self, 'system_monitor') and self.system_monitor and self.system_monitor.isRunning():

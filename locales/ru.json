@@ -60,6 +60,7 @@
     "scanner.model_placeholder": "Имя выбранной .gguf модели",
 
     "config.model_label": "Модель:",
+    "config.model_placeholder": "Модель не выбрана",
     "config.browse": "Обзор",
     "config.dir_prefix": "Каталог:",
     "config.gb": "ГБ",
