@@ -49,6 +49,12 @@ LLM-Control-v2/
 └── dist/                   # Собранный PyInstaller-артефакт (не залит в git)
 ```
 
+### Документация
+
+- [Архитектура и руководство разработчика](docs/ARCHITECTURE_RU.md) (EN: [ARCHITECTURE.md](docs/ARCHITECTURE.md))
+- [Почему LLM-Control — сравнение с аналогами](docs/COMPARISON_RU.md) (EN: [COMPARISON.md](docs/COMPARISON.md))
+- Развёртывание сервера: [РАЗВЁРТЫВАНИЕ.md](docs/РАЗВЁРТЫВАНИЕ.md) · Установка llama-server: [Установка_llama-server.md](docs/Установка_llama-server.md) · Режимы работы: [MODES_RU.md](docs/MODES_RU.md)
+
 ## Требования
 
 - **ОС:** Linux (Ubuntu 20.04+)

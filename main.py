@@ -13,6 +13,17 @@ logging.basicConfig(
 )
 logging.getLogger("paramiko").setLevel(logging.WARNING)
 
+def _resolve_base_dir() -> str:
+    """Директория внешнего .env: рядом с бинарем (frozen) или со скриптом.
+
+    В onefile-сборке PyInstaller __file__ указывает внутрь временного
+    _MEIPASS, поэтому ориентироваться на него нельзя — иначе вшитый .env
+    перекрывал бы настройки из .env рядом с исполняемым файлом
+    (load_dotenv не переопределяет уже установленные переменные)."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
 def load_environment(base_dir):
     """Загрузка переменных окружения из .env файла."""
     env_path = os.path.join(base_dir, ".env")
@@ -31,11 +42,15 @@ def load_environment(base_dir):
     return False
 
 def main():
-    # Определяем базовую директорию приложения
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # Внешний .env (рядом с бинарем/скриптом) имеет приоритет; в frozen-сборке
+    # при его отсутствии откатываемся на .env, вшитый в бинарник (spec datas).
+    base_dir = _resolve_base_dir()
     logging.info(f"[MAIN] Запуск приложения. Директория: {base_dir}")
 
-    load_environment(base_dir)
+    if not load_environment(base_dir) and getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            load_environment(meipass)
 
     app = QApplication(sys.argv)
 

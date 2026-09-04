@@ -50,6 +50,12 @@ LLM-Control-v2/
 └── dist/                   # PyInstaller artifact (not committed to git)
 ```
 
+### Documentation
+
+- [Architecture & Developer Guide](docs/ARCHITECTURE.md) — modules, threading, data files, build/deploy, code conventions (RU: [АРХИТЕКТУРА](docs/ARCHITECTURE_RU.md))
+- [Why LLM-Control — comparison with analogs](docs/COMPARISON.md) (RU: [сравнение](docs/COMPARISON_RU.md))
+- Server deployment: [DEPLOYMENT.md](docs/DEPLOYMENT.md) · llama-server installation: [llama-server-installation.md](docs/llama-server-installation.md) · operating modes: [MODES.md](docs/MODES.md)
+
 ## Requirements
 
 - **OS:** Linux (Ubuntu 20.04+)
