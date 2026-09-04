@@ -1,17 +1,20 @@
 # scanner_widget.py
 # -*- coding: utf-8 -*-
 import os
+import sys
 import logging
 from typing import List, Tuple
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QLabel, QLineEdit, QFileDialog, QHeaderView,
-    QProgressBar, QSizePolicy, QMessageBox
+    QProgressBar, QSizePolicy, QMessageBox, QComboBox, QLayout,
+    QWidgetItem, QLayoutItem
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QRect, QSize, Slot
 from PySide6.QtGui import QBrush, QColor, QFont
 
+from dotenv import set_key
 from locale_manager import locale
 
 # Предполагаем наличие этого модуля в проекте
@@ -21,10 +24,110 @@ except ImportError:
     logging.error("Модуль services.model_scanner не найден")
     def find_files_by_extension(*args): return []
 
+
+def _resolve_env_path() -> str:
+    """.env рядом с исполняемым файлом (frozen-сборка) или со скриптом (Thonny/venv) -
+    не зависит от текущей рабочей директории процесса."""
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, ".env")
+
+
+class WrappingLayout(QLayout):
+    """Раскладывает элементы по строкам и переносит на новую строку, когда
+    текущая строка заполнена. Используется для строки «Путь сканирования»,
+    чтобы при сужении окна комбобокс «Язык» переносился на следующую строку,
+    а не вытеснял кнопки за пределы окна."""
+
+    def __init__(self, parent=None, margin=0, spacing=-1):
+        super().__init__(parent)
+        self._margin = int(margin)
+        self._spacing = int(spacing) if spacing >= 0 else 6
+        self._items = []
+
+    def __del__(self):
+        # PySide6 сам управляет C++-жизнью раскладки и её элементов.
+        # Здесь только сбрасываем Python-список, чтобы не держать лишние ссылки.
+        self._items.clear()
+
+    def addWidget(self, widget):
+        if widget is not None:
+            self.addItem(QWidgetItem(widget))
+
+    def addLayout(self, layout):
+        if layout is not None:
+            self.addItem(QLayoutItem(layout))
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Horizontal | Qt.Vertical
+
+    def hasSizeHint(self):
+        return True
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return QSize(size.width() + 2 * self._margin, size.height() + 2 * self._margin)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        if self.count() == 0:
+            return
+        self._do_layout(rect)
+
+    def _do_layout(self, rect: QRect) -> None:
+        top = rect.top()
+        x = rect.x()
+        y = rect.y()
+        line_height = 0
+
+        for item in self._items:
+            widget = item.widget()
+            if widget is None or not widget.isVisible():
+                continue
+
+            width = item.sizeHint().width()
+            width = min(width, item.maximumSize().width())
+            width = max(width, item.minimumSize().width())
+
+            # Если элемент не влезает в текущую строку — переносим её.
+            if x + width > rect.right() and x > rect.x():
+                x = rect.x()
+                y = top + line_height + self._spacing
+                line_height = 0
+
+            height = item.sizeHint().height()
+            height = min(height, item.maximumSize().height())
+            height = max(height, item.minimumSize().height())
+
+            item.setGeometry(QRect(x, y, width, height))
+            x += width + self._spacing
+            line_height = max(line_height, height)
+
 class ScannerWidget(QWidget):
     scan_started = Signal()
     scan_finished = Signal(list)  # List[Tuple[str, float]] - (путь, размер)
-    model_selected = Signal(str, float)   # (путь, размер) 
+    model_selected = Signal(str, float)   # (путь, размер)
+    # Язык изменён — нужно повторить перевод интерфейса (сигнал ловит main_ui)
+    language_changed = Signal(str)
  
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -32,7 +135,10 @@ class ScannerWidget(QWidget):
         self.current_scan_path = os.getenv("LAST_SCAN_PATH") or ""
         self.current_save_path = os.getenv("LAST_SAVE_PATH") or ""
         self.llama_path = os.getenv("LLAMA_PATH") or ""
-        
+
+        # Путь к .env для сохранения выбранного языка
+        self._env_path = _resolve_env_path()
+
         # Структура данных: [(full_path, size_gb, has_vision_bool), ...]
         self.models_data: List[Tuple[str, float, bool]] = []
         self._sort_states: dict = {}  # {column_index: ascending_bool}
@@ -43,31 +149,45 @@ class ScannerWidget(QWidget):
         self.layout.setContentsMargins(10, 10, 10, 10)
         self.layout.setSpacing(10)
 
-        # Панель выбора пути
-        self.scan_path_layout = QHBoxLayout()
+        # Единая строка: путь сканирования + кнопки + выбор языка.
+        # Используется переносящая раскладка (WrappingLayout), чтобы при сужении
+        # окна комбобокс «Язык» переносился на новую строку, а не вытеснял
+        # кнопки за пределы окна. Поле пути ограничено по ширине, чтобы все
+        # элементы (кнопки и комбобокс «Язык») помещались в одну строку.
+        self.top_layout = WrappingLayout()
+        self.top_layout.setContentsMargins(0, 0, 0, 0)
+        self.top_layout.setSpacing(6)
+
         self.scan_path_label = QLabel(locale.translate('scanner.path_label'))
         self.scan_path_edit = QLineEdit(self.current_scan_path)
         self.scan_path_edit.setReadOnly(True)
+        self.scan_path_edit.setMinimumWidth(160)
+        self.scan_path_edit.setMaximumWidth(320)
 
         self.browse_button = QPushButton(locale.translate('scanner.browse'))
         self.browse_button.clicked.connect(self._browse_directory)
 
-        self.scan_path_layout.addWidget(self.scan_path_label)
-        self.scan_path_layout.addWidget(self.scan_path_edit)
-        self.scan_path_layout.addWidget(self.browse_button)
-        self.layout.addLayout(self.scan_path_layout)
-
-        # Кнопки управления
-        self.control_buttons_layout = QHBoxLayout()
         self.scan_button = QPushButton(locale.translate('scanner.scan'))
         self.scan_button.clicked.connect(self.start_scan)
         self.save_button = QPushButton(locale.translate('scanner.save_list'))
         self.save_button.clicked.connect(self.save_sorted_list)
 
-        self.control_buttons_layout.addWidget(self.scan_button)
-        self.control_buttons_layout.addWidget(self.save_button)
-        self.control_buttons_layout.addStretch()
-        self.layout.addLayout(self.control_buttons_layout)
+        # Строка выбора языка (перенесена со вкладки «Параметры модели»)
+        self.language_label = QLabel(locale.translate('config.language_label'))
+        self.language_combo = QComboBox()
+        self._populate_language_combo()
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+        self.language_combo.setMaximumWidth(140)
+
+        self.top_layout.addWidget(self.scan_path_label)
+        self.top_layout.addWidget(self.scan_path_edit)
+        self.top_layout.addWidget(self.browse_button)
+        self.top_layout.addWidget(self.scan_button)
+        self.top_layout.addWidget(self.save_button)
+        self.top_layout.addWidget(self.language_label)
+        self.top_layout.addWidget(self.language_combo)
+
+        self.layout.addLayout(self.top_layout)
 
         # Прогресс-бар
         self.progress_bar = QProgressBar()
@@ -243,8 +363,32 @@ class ScannerWidget(QWidget):
             logging.info(f"[SW] Выбрана модель: {full_path}")
             self.model_selected.emit(full_path, size_gb)
 
+    def _populate_language_combo(self):
+        """Заполняет комбо языков переведёчными названиями и выделяет текущий."""
+        self.language_combo.blockSignals(True)
+        self.language_combo.clear()
+        for code, name_key in (("ru", "config.lang_ru"), ("en", "config.lang_en"), ("es", "config.lang_es")):
+            self.language_combo.addItem(locale.translate(name_key), code)
+        index = self.language_combo.findData(locale.current_language)
+        if index >= 0:
+            self.language_combo.setCurrentIndex(index)
+        self.language_combo.blockSignals(False)
+
+    @Slot(int)
+    def _on_language_changed(self, _index: int):
+        code = self.language_combo.currentData()
+        if not code or code == locale.current_language:
+            return
+        locale.load_locale(code)
+        set_key(self._env_path, "LANGUAGE", code)
+        self.language_changed.emit(code)
+
     def retranslate(self) -> None:
         """Перекладываем статические элементы без пересоздания виджетов/данных."""
+        self.language_label.setText(locale.translate('config.language_label'))
+        # Повторно показываем перевод языков в комбо (с заблокированными
+        # сигналами — смена языка при перекладывании не запускается).
+        self._populate_language_combo()
         self.scan_path_label.setText(locale.translate('scanner.path_label'))
         self.browse_button.setText(locale.translate('scanner.browse'))
         self.scan_button.setText(locale.translate('scanner.scan'))

@@ -1,6 +1,7 @@
 # main.py
 import sys
 import os
+import signal
 import logging
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -37,6 +38,21 @@ def main():
     load_environment(base_dir)
 
     app = QApplication(sys.argv)
+
+    # Жёсткое убийство процесса (SIGTERM/SIGINT) не вызывает closeEvent, поэтому
+    # QThread мониторинга уничтожается во время работы — это вызывает сбой.
+    # Перехватываем сигналы и завершаем приложение чисто: app.quit() запускает
+    # closeEvent, который штатно останавливает и ждёт поток мониторинга.
+    def _graceful_exit(signum, frame):
+        logging.info(f"[MAIN] Сигнал {signum} — завершаем работу.")
+        app.quit()
+
+    try:
+        signal.signal(signal.SIGTERM, _graceful_exit)
+        signal.signal(signal.SIGINT, _graceful_exit)
+    except (ValueError, OSError):
+        # Не в основном потоке или платформа не поддерживает — оставляем поведение по умолчанию
+        pass
 
     try:
         # Импорт внутри try, чтобы перехватить ошибки отсутствующих зависимостей UI

@@ -51,9 +51,14 @@ class MainWindow(QMainWindow):
         self.system_monitor.start()
         self.server_control: ServerControl = ServerControl()
 
-        # Настройки главного окна
+        # Настройки главного окна. Ширину берём из .env (APP_WIDTH),
+        # по умолчанию — 1380; высоту оставляем 720.
         self.setWindowTitle("LLM-Control BY")
-        self.setGeometry(100, 100, 900, 720)
+        try:
+            window_width = int(os.getenv("APP_WIDTH", "1380"))
+        except ValueError:
+            window_width = 1380
+        self.setGeometry(100, 100, window_width, 720)
 
         # Главный контейнер
         self.central_widget = QWidget()
@@ -127,7 +132,7 @@ class MainWindow(QMainWindow):
         self._init_metrics_labels()
         self._connect_signals()
         # По умолчанию открываем вкладку «Параметры модели» — там работа с пресетами
-        self.tab_widget.setCurrentIndex(1)
+        self.tab_widget.setCurrentIndex(0)
 
     def _setup_timers(self) -> None:
         self.system_update_timer = QTimer(self)
@@ -147,7 +152,7 @@ class MainWindow(QMainWindow):
         self.config_widget.run_command_requested.connect(self._on_command_requested)
 
         # Смена языка в ConfigWidget → перекладываем весь интерфейс
-        self.config_widget.language_changed.connect(self.retranslate_ui)
+        self.scanner_widget.language_changed.connect(self.retranslate_ui)
 
     def _on_command_requested(self, command_string: str) -> None:
         """Обработка конфигурационной команды, полученной из ConfigWidget."""

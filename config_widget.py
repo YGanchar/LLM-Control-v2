@@ -12,9 +12,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QMessageBox
 )
 from PySide6.QtCore import Qt, Slot, Signal, QTimer
-from PySide6.QtWidgets import QComboBox
 
-from dotenv import set_key
 from services.model_scanner import find_files_by_extension
 
 from locale_manager import locale
@@ -123,22 +121,6 @@ class ConfigWidget(QWidget):
         top_layout.addWidget(left_top_part, CONST_LAYOUT_WIDTH_TOP_LEFT)
         top_layout.addWidget(right_top_part, CONST_LAYOUT_WIDTH_TOP_RIGHT)
         layout.addWidget(top_widget)
-
-        # --- СТРОКА ВЫБОРА ЯЗЫКА ---
-        language_row = QWidget()
-        language_row_layout = QHBoxLayout(language_row)
-        language_row_layout.setContentsMargins(0, 0, 0, 0)
-        language_row_layout.setSpacing(6)
-
-        self.language_label = QLabel(locale.translate('config.language_label'))
-        self.language_combo = QComboBox()
-        self._populate_language_combo()
-        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
-
-        language_row_layout.addWidget(self.language_label)
-        language_row_layout.addWidget(self.language_combo)
-        language_row_layout.addStretch()
-        layout.addWidget(language_row)
 
         # --- ГЛАВНЫЙ СПЛИТТЕР (Дальше код остается без изменений) ---
         self.h_splitter = QSplitter(Qt.Horizontal)
@@ -524,28 +506,7 @@ class ConfigWidget(QWidget):
     def _update_mods_path_label(self):
         self.mods_path_label.setText(f"{locale.translate('config.dir_prefix')} {self.mods_path}")
 
-    def _populate_language_combo(self):
-        """Заполняет комбо языков переведёнными названиями и выделяет текущий."""
-        self.language_combo.blockSignals(True)
-        self.language_combo.clear()
-        for code, name_key in (("ru", "config.lang_ru"), ("en", "config.lang_en"), ("es", "config.lang_es")):
-            self.language_combo.addItem(locale.translate(name_key), code)
-        index = self.language_combo.findData(locale.current_language)
-        if index >= 0:
-            self.language_combo.setCurrentIndex(index)
-        self.language_combo.blockSignals(False)
-
-    @Slot(int)
-    def _on_language_changed(self, _index: int):
-        code = self.language_combo.currentData()
-        if not code or code == locale.current_language:
-            return
-        locale.load_locale(code)
-        set_key(self._env_path, "LANGUAGE", code)
-        self.language_changed.emit(code)
-
     def retranslate(self):
-        self.language_label.setText(locale.translate('config.language_label'))
         self.model_name_label.setText(locale.translate('config.model_label'))
         self.button_modfiles.setText(locale.translate('config.browse'))
         self._update_mods_path_label()
@@ -564,8 +525,3 @@ class ConfigWidget(QWidget):
         self.text_edit_left.setPlaceholderText(locale.translate('config.left_placeholder'))
         self.text_edit_right.setPlaceholderText(locale.translate('config.right_placeholder'))
 
-        # Повторно показываем перевод языков в комбо.
-        # _populate_language_combo() уже выделяет current_language с
-        # заблокированными сигналами, поэтому перекладирование через
-        # retranslate() не запускает повторную загрузку языка.
-        self._populate_language_combo()
