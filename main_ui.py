@@ -164,8 +164,10 @@ class MainWindow(QMainWindow):
         try:
             last_scan_path = self.scanner_widget.current_scan_path
             last_save_path = self.scanner_widget.current_save_path
+            last_model_path = getattr(self.scanner_widget, "last_selected_path", "")
             set_key(".env", "LAST_SCAN_PATH", last_scan_path)
             set_key(".env", "LAST_SAVE_PATH", last_save_path)
+            set_key(".env", "LAST_MODEL_PATH", last_model_path)
             logging.info("[MAIN_UI] Настройки успешно сохранены.")
         except Exception as e:
             logging.error(f"[MAIN_UI] Ошибка сохранения настроек: {e}")
