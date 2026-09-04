@@ -8,8 +8,7 @@ from typing import List, Tuple
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QLabel, QLineEdit, QFileDialog, QHeaderView,
-    QProgressBar, QSizePolicy, QMessageBox, QComboBox, QLayout,
-    QWidgetItem, QLayoutItem
+    QProgressBar, QSizePolicy, QMessageBox, QComboBox
 )
 from PySide6.QtCore import Qt, Signal, QRect, QSize, Slot
 from PySide6.QtGui import QBrush, QColor, QFont
@@ -35,92 +34,64 @@ def _resolve_env_path() -> str:
     return os.path.join(base_dir, ".env")
 
 
-class WrappingLayout(QLayout):
-    """Раскладывает элементы по строкам и переносит на новую строку, когда
-    текущая строка заполнена. Используется для строки «Путь сканирования»,
-    чтобы при сужении окна комбобокс «Язык» переносился на следующую строку,
-    а не вытеснял кнопки за пределы окна."""
+class WrappingBar(QWidget):
+    """Переносяющаяся строка управления на базе QWidget (не QLayout).
 
-    def __init__(self, parent=None, margin=0, spacing=-1):
+    QLayout-раскладки в PySide6 6.11 не вызываются C++-движком раскладки:
+    переопределения sizeHint/minimumSize игнорируются, а политику растягивания
+    задать нельзя — в результате раскладка растЯгивается по вертикали и сжимает
+    таблицу. У QWidget sizeHint, resizeEvent и set работают штатно, поэтому
+    перенос элементов по строкам делаем в resizeEvent этого виджета. По
+    вертикали виджет не растягивается — вся оставшаяся высота вкладки
+    достаётся таблице."""
+
+    def __init__(self, parent=None, margin=0, spacing=6):
         super().__init__(parent)
         self._margin = int(margin)
         self._spacing = int(spacing) if spacing >= 0 else 6
-        self._items = []
-
-    def __del__(self):
-        # PySide6 сам управляет C++-жизнью раскладки и её элементов.
-        # Здесь только сбрасываем Python-список, чтобы не держать лишние ссылки.
-        self._items.clear()
+        self._widgets = []
+        # Строка занимает только свою высоту, по ширине — всю доступную.
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
     def addWidget(self, widget):
         if widget is not None:
-            self.addItem(QWidgetItem(widget))
+            widget.setParent(self)
+            self._widgets.append(widget)
 
-    def addLayout(self, layout):
-        if layout is not None:
-            self.addItem(QLayoutItem(layout))
-
-    def addItem(self, item):
-        self._items.append(item)
-
-    def count(self):
-        return len(self._items)
-
-    def itemAt(self, index):
-        return self._items[index] if 0 <= index < len(self._items) else None
-
-    def takeAt(self, index):
-        return self._items.pop(index) if 0 <= index < len(self._items) else None
-
-    def expandingDirections(self):
-        return Qt.Horizontal | Qt.Vertical
-
-    def hasSizeHint(self):
-        return True
-
-    def sizeHint(self):
-        return self.minimumSize()
-
-    def minimumSize(self):
-        size = QSize()
-        for item in self._items:
-            size = size.expandedTo(item.minimumSize())
-        return QSize(size.width() + 2 * self._margin, size.height() + 2 * self._margin)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        if self.count() == 0:
-            return
-        self._do_layout(rect)
-
-    def _do_layout(self, rect: QRect) -> None:
-        top = rect.top()
-        x = rect.x()
-        y = rect.y()
+    def _do_layout(self) -> None:
+        rect = self.contentsRect()
+        x = rect.left()
+        y = rect.top()
         line_height = 0
-
-        for item in self._items:
-            widget = item.widget()
-            if widget is None or not widget.isVisible():
+        for widget in self._widgets:
+            if not widget.isVisible():
                 continue
-
-            width = item.sizeHint().width()
-            width = min(width, item.maximumSize().width())
-            width = max(width, item.minimumSize().width())
+            width = widget.sizeHint().width()
+            width = min(width, widget.maximumSize().width())
+            width = max(width, widget.minimumSize().width())
 
             # Если элемент не влезает в текущую строку — переносим её.
-            if x + width > rect.right() and x > rect.x():
-                x = rect.x()
-                y = top + line_height + self._spacing
+            if x + width > rect.right() and x > rect.left() + self._margin:
+                x = rect.left() + self._margin
+                y += line_height + self._spacing
                 line_height = 0
 
-            height = item.sizeHint().height()
-            height = min(height, item.maximumSize().height())
-            height = max(height, item.minimumSize().height())
-
-            item.setGeometry(QRect(x, y, width, height))
+            height = widget.sizeHint().height()
+            widget.setGeometry(QRect(x, y, width, height))
             x += width + self._spacing
             line_height = max(line_height, height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._do_layout()
+
+    def sizeHint(self):
+        width = 0
+        height = 0
+        for widget in self._widgets:
+            width += widget.sizeHint().width() + self._spacing
+            height = max(height, widget.sizeHint().height())
+        return QSize(width, height)
 
 class ScannerWidget(QWidget):
     scan_started = Signal()
@@ -150,13 +121,13 @@ class ScannerWidget(QWidget):
         self.layout.setSpacing(10)
 
         # Единая строка: путь сканирования + кнопки + выбор языка.
-        # Используется переносящая раскладка (WrappingLayout), чтобы при сужении
+        # Используется переносящийся виджет WrappingBar, чтобы при сужении
         # окна комбобокс «Язык» переносился на новую строку, а не вытеснял
         # кнопки за пределы окна. Поле пути ограничено по ширине, чтобы все
         # элементы (кнопки и комбобокс «Язык») помещались в одну строку.
-        self.top_layout = WrappingLayout()
-        self.top_layout.setContentsMargins(0, 0, 0, 0)
-        self.top_layout.setSpacing(6)
+        # По вертикали виджет не растягивается — таблица занимает всю
+        # оставшуюся высоту вкладки.
+        self.top_layout = WrappingBar()
 
         self.scan_path_label = QLabel(locale.translate('scanner.path_label'))
         self.scan_path_edit = QLineEdit(self.current_scan_path)
@@ -187,7 +158,7 @@ class ScannerWidget(QWidget):
         self.top_layout.addWidget(self.language_label)
         self.top_layout.addWidget(self.language_combo)
 
-        self.layout.addLayout(self.top_layout)
+        self.layout.addWidget(self.top_layout)
 
         # Прогресс-бар
         self.progress_bar = QProgressBar()
