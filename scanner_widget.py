@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QLabel, QLineEdit, QFileDialog, QHeaderView,
     QProgressBar, QSizePolicy, QMessageBox, QComboBox
 )
-from PySide6.QtCore import Qt, Signal, QRect, QSize, Slot
+from PySide6.QtCore import Qt, Signal, QRect, QSize, Slot, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont
 
 from dotenv import set_key
@@ -148,15 +148,33 @@ class WrappingBar(QWidget):
             x += width + spacing
             line_height = max(line_height, height)
 
+        # Разобьём размещённые виджеты по строкам (по y) и найдём высоту каждой
+        # строки — по самому высокому виджету. Она нужна, чтобы центрировать по
+        # вертикали виджеты ниже максимальной высоты строки (например, метки).
+        lines = {}  # y -> [placed items]
+        for item in placed:
+            lines.setdefault(item[2], []).append(item)
+        line_heights = {ly: max(it[4] for it in its) for ly, its in lines.items()}
+
+        # Ставим виджет на вычисленную позицию, центрируя его по вертикали
+        # внутри строки. Сдвиг (shift) применяется ко второму проходу — вправо.
+        def place(idx, px, py, pw, ph, shift=0):
+            offset = (line_heights[py] - ph) // 2
+            self._widgets[idx].setGeometry(QRect(px + shift, py + offset, pw, ph))
+
+        # Первый проход теперь реально расставляет виджеты — до этой правки
+        # позиции только вычислялись в placed и применялись лишь к «хвосту»,
+        # из-за чего лево-виджеты оставались в (0,0) и накладывались друг на
+        # друга (например, «Сохранить список» поле пути поверх него).
+        for (idx, px, py, pw, ph) in placed:
+            place(idx, px, py, pw, ph)
+
         # Второй проход: виджеты после последнего разделителя прижаем вправо
         # как единый блок на их строке (чтобы группа языка не «прилипала» к
         # левому краю и не наезжала друг на друга). Сдвиг единый для всей
         # строки — сохраняются промежутки между виджетами блока.
         if last_stretch >= 0:
             trailing = {id(w) for w in self._widgets[last_stretch + 1:]}
-            lines = {}  # y -> [placed items]
-            for item in placed:
-                lines.setdefault(item[2], []).append(item)
             for items in lines.values():
                 right_items = [it for it in items if id(self._widgets[it[0]]) in trailing]
                 if not right_items:
@@ -166,7 +184,16 @@ class WrappingBar(QWidget):
                 if not shift:
                     continue
                 for (idx, px, py, pw, ph) in right_items:
-                    self._widgets[idx].setGeometry(QRect(px + shift, py, pw, ph))
+                    place(idx, px, py, pw, ph, shift=shift)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Размер виджета уточняется родителем уже после показа, поэтому
+        # пересчитываем раскладку в следующем цикле событий — когда размеры
+        # уже известны. Иначе в некоторых платформах (в т.ч. offscreen)
+        # resizeEvent не доводит раскладку до конца и виджеты остаются
+        # наложенными в (0,0).
+        QTimer.singleShot(0, self._do_layout)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

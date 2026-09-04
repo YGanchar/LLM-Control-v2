@@ -218,8 +218,8 @@ class MainWindow(QMainWindow):
             instances = stats.get("instances", {})
             gpus = stats.get("gpu", [])
 
-            self.cpu_label.setText(f"{locale.translate('status.cpu')}{system['cpu']:.1f}%")
-            self.ram_label.setText(f"{locale.translate('status.ram')}{system['ram']:.1f}%")
+            self.cpu_label.setText(f"{locale.translate('status.cpu')} {system['cpu']:.1f}%")
+            self.ram_label.setText(f"{locale.translate('status.ram')} {system['ram']:.1f}%")
 
             inst_8080 = instances.get(8080, {})
             if inst_8080.get("running"):
