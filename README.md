@@ -1,134 +1,139 @@
 # LLM-Control v2
 
-Десктопное приложение на **Python / PySide6** для управления локальным LLM-инстансом
-`llama-server`, работающим на удалённом сервере с GPU NVIDIA RTX.
+A **Python / PySide6** desktop app for managing a local `llama-server` LLM
+instance running on a remote NVIDIA RTX GPU server.
 
-Проект является **дополнением к [ContextExporter](https://github.com/YGanchar/ContextExporter)**:
-если `ContextExporter` готовит и экспортирует контекст, то `LLM-Control v2` отвечает за
-запуск и мониторинг самой модели на железе — сканирование моделей, сбор конфигурации
-`.mod` и удалённое управление инстансами через SSH.
+This project **complements [ContextExporter](https://github.com/YGanchar/ContextExporter)**:
+where `ContextExporter` prepares and exports context, `LLM-Control v2` handles the
+launch and monitoring of the model itself on the hardware — scanning models,
+building the `.mod` configuration, and remotely managing instances over SSH.
 
-> **Заточен под** связку `Tiel-Coder-35B-A3B-MTP` (Ornith-1.5-35B-A3B) в кванте
-> `Q4_K_S` на двух RTX 3060 (12 ГБ) со спекулятивным декодированием по MTP-голове
-> (`--spec-type draft-mtp`). Всё остальное настраивается под любую `.gguf`-модель.
+> **Baked for** the `Tiel-Coder-35B-A3B-MTP` (Ornith-1.5-35B-A3B) model at
+> `Q4_K_S` quantization across two RTX 3060 (12 GB) with speculative decoding via
+> the MTP head (`--spec-type draft-mtp`). Everything else is tunable to any
+> `.gguf` model.
+
+> **Russian version** — [`README_RU.md`](README_RU.md).
 
 ---
 
-## Возможности
+## Features
 
-- **Сканер моделей** — поиск `.gguf`-файлов на диске, таблица с размером и флагом vision.
-- **Конфигуратор `.mod`** — создание и редактирование пресетов запуска `llama-server`
-  с автоматическим подбором `CTX`/`NGL`/`BATCH` по размеру модели, кванту и ёмкости VRAM.
-- **Управление сервером** — старт/стоп/перезапуск инстансов (порты 8080 и 8081) по SSH,
-  Wake-on-LAN, валидация конфигурации перед сохранением.
-- **Мониторинг в реальном времени** — CPU/RAM сервера, VRAM и энергопотребление каждой GPU,
-  статус инстансов (обновление каждые 2 с).
+- **Model scanner** — finds `.gguf` files on disk, table with size and a vision flag.
+- **`.mod` configurator** — create and edit launch presets for `llama-server`, with
+  automatic `CTX`/`NGL`/`BATCH` selection based on model size, quantization, and VRAM capacity.
+- **Server control** — start/stop/restart instances (ports 8080 and 8081) over SSH,
+  Wake-on-LAN, config validation before saving.
+- **Real-time monitoring** — server CPU/RAM, VRAM and power draw per GPU, instance
+  status (refreshes every 2 s).
 
-## Архитектура
+## Architecture
 
 ```
 LLM-Control-v2/
-├── main.py                 # Точка входа (загрузка .env, старт GUI)
-├── main_ui.py              # Главное окно (координация виджетов)
-├── scanner_widget.py       # Виджет сканирования моделей
-├── config_widget.py        # Виджет конфигурации .mod-файлов
-├── server_widget.py        # Виджет управления сервером и мониторинга
-├── model_layers.json       # Маппинг размеров моделей → n_layer
-├── requirements.txt        # Зависимости Python
+├── main.py                 # Entry point (.env loading, GUI startup)
+├── main_ui.py              # Main window (widget coordination)
+├── scanner_widget.py       # Model-scanning widget
+├── config_widget.py        # .mod-config widget
+├── server_widget.py        # Server control and monitoring widget
+├── model_layers.json       # Model-size → n_layer mapping
+├── requirements.txt        # Python dependencies
 ├── services/
-│   ├── model_scanner.py    # Сканирование файловой системы
-│   ├── system_monitor.py   # Мониторинг сервера по SSH
-│   ├── server_control.py   # Контроль процессов llama-server
-│   ├── ssh_manager.py      # Общий SSH-доступ: поиск ключа, сбор аргументов
-│   ├── mod_generator.py    # Генератор .mod-файлов
-│   └── ssh_setup.py        # Мастер настройки SSH-доступа
-├── server/                 # Развёртывание на сервере (llmctl, systemd, deploy-скрипт)
-├── docs/                   # Инструкции (РАЗВЁРТЫВАНИЕ, Установка llama-server, MODES и др.)
-└── dist/                   # Собранный PyInstaller-артефакт (не залит в git)
+│   ├── model_scanner.py    # Filesystem scanning
+│   ├── system_monitor.py   # Server monitoring over SSH
+│   ├── server_control.py   # llama-server process control
+│   ├── ssh_manager.py      # Shared SSH access: key lookup, arg assembly
+│   ├── mod_generator.py    # .mod-file generator
+│   └── ssh_setup.py        # SSH-access setup wizard
+├── server/                 # Server deployment (llmctl, systemd, deploy script)
+├── docs/                   # Guides (DEPLOYMENT, llama-server installation, MODES, etc.)
+└── dist/                   # PyInstaller artifact (not committed to git)
 ```
 
-## Требования
+## Requirements
 
-- **ОС:** Linux (Ubuntu 20.04+)
+- **OS:** Linux (Ubuntu 20.04+)
 - **Python:** 3.8+
-- **GPU:** NVIDIA RTX (драйверы + CUDA)
-- **Сеть:** доступ к серверу по SSH (безпарольный, по ключу)
+- **GPU:** NVIDIA RTX (drivers + CUDA)
+- **Network:** SSH access to the server (passwordless, key-based)
 
-## Установка
+## Installation
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-Зависимости: `PySide6`, `paramiko`, `psutil`, `python-dotenv` (+ опц. `wakeonlan`).
+Dependencies: `PySide6`, `paramiko`, `psutil`, `python-dotenv` (+ optional `wakeonlan`).
 
-## Конфигурация
+## Configuration
 
-Приложение читает `.env` из корня. Скопируйте шаблон и заполните:
+The app reads `.env` from the project root. Copy the template and fill it in:
 
 ```bash
 cp .env.example .env
 ```
 
-Ключевые параметры:
+Key parameters:
 
-| Параметр | Назначение |
-|----------|-----------|
-| `LAST_SCAN_PATH` | Папка с `.gguf`-моделями на клиенте |
-| `LAST_MODS_PATH` | Папка с пресетами `.mod` |
-| `SSH_HOST` / `SERVER_HOST` | Хост и IP сервера |
-| `SERVER_USER` / `SERVER_MAC` | Пользователь и MAC для SSH / Wake-on-LAN |
-| `DEFAULT_CONFIG_PATH` | Путь к `.conf`-пресету инстанса 8080 на сервере |
-| `GPU_RAM_GB` | Ёмкость VRAM одной карты (для подбора параметров) |
+| Parameter | Purpose |
+|-----------|---------|
+| `LAST_SCAN_PATH` | Folder with `.gguf` models on the client |
+| `LAST_MODS_PATH` | Folder with `.mod` presets |
+| `SSH_HOST` / `SERVER_HOST` | Server host and IP |
+| `SERVER_USER` / `SERVER_MAC` | User and MAC for SSH / Wake-on-LAN |
+| `DEFAULT_CONFIG_PATH` | Path to the 8080 instance `.conf` preset on the server |
+| `GPU_RAM_GB` | VRAM capacity of one card (for parameter selection) |
 
-Аутентификация — **только по SSH-ключу** (рекомендуется `ed25519` без passphrase).
-Пароли не поддерживаются.
+Authentication is **key-based only** (`ed25519` without passphrase recommended).
+Passwords are not supported.
 
-## Использование
+## Usage
 
-1. **Сканер моделей** — выбрать директорию с `.gguf`, сканировать, двойной клик по строке.
-2. **Параметры модели** — выбрать/отредактировать `.mod` (`MODEL`, `PORT`, `CTX`, `NGL`,
-   `BATCH`, `THREADS`, `EXTRA`), сохранить, перейти к серверу.
-3. **Сервер RTX** — выбрать инстанс (8080 / 8081), старт/стоп/перезапуск, посмотреть
-   статус/логи, включить по WoL / выключить по SSH.
+1. **Model scanner** — pick a directory with `.gguf`, scan, double-click a row.
+2. **Model parameters** — pick/edit a `.mod` (`MODEL`, `PORT`, `CTX`, `NGL`,
+   `BATCH`, `THREADS`, `EXTRA`), save, then go to the server.
+3. **RTX server** — pick an instance (8080 / 8081), start/stop/restart, view
+   status/logs, power on via WoL / off via SSH.
 
-Полная пошаговая инструкция — в [`docs/ИНСТРУКЦИЯ.md`](docs/ИНСТРУКЦИЯ.md).
+Full step-by-step guide — in [`docs/USAGE.md`](docs/USAGE.md).
+(Russian version — [`docs/ИНСТРУКЦИЯ.md`](docs/ИНСТРУКЦИЯ.md).)
 
-## Скриншоты
+## Screenshots
 
-Сканер моделей (вкладка 1):
+Model scanner (tab 1):
 
-![Сканер моделей](screenshot_scanner.png)
+![Model scanner](screenshot_scanner.png)
 
-Параметры модели — пресет `.mod` (вкладка 2):
+Model parameters — a `.mod` preset (tab 2):
 
-![Параметры модели](screenshot_config.png)
+![Model parameters](screenshot_config.png)
 
-Управление сервером и мониторинг GPU (вкладка 3):
+Server control and GPU monitoring (tab 3):
 
-![Управление сервером](screenshot_server.png)
+![Server control](screenshot_server.png)
 
-## Развёртывание на сервере
+## Server deployment
 
-Установить `llama-server` и `llmctl`, настроить `sudoers` и NFS — автоматизирует
-`server/deploy-server.sh`. Полная инструкция (сервер + клиент) — в
-[`docs/РАЗВЁРТЫВАНИЕ.md`](docs/РАЗВЁРТЫВАНИЕ.md).
+Install `llama-server` and `llmctl`, configure `sudoers` and NFS — automated by
+`server/deploy-server.sh`. Full guide (server + client) — in
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+(Russian version — [`docs/РАЗВЁРТЫВАНИЕ.md`](docs/РАЗВЁРТЫВАНИЕ.md).)
 
-## Сборка (PyInstaller)
+## Building (PyInstaller)
 
 ```bash
 pyinstaller --onefile --noconsole --name LLM-Control_v2 main.py
 ```
 
-Артефакт попадает в `dist/` (в репозиторий не залит).
+The artifact lands in `dist/` (not committed to the repo).
 
-## Лицензия
+## License
 
-[GPL-3.0](LICENSE). Проект распространяется «как есть»; при перераспространении
-изменённых версий обязательна та же лицензия GPL-3.0.
+[GPL-3.0](LICENSE). Distributed "as is"; redistributed modified versions must
+carry the same GPL-3.0 license.
 
-## Связанные проекты
+## Related projects
 
-- **[ContextExporter](https://github.com/YGanchar/ContextExporter)** — подготовка и
-  экспорт контекста; работает в связке с LLM-Control v2 в пайплайне локального LLM.
+- **[ContextExporter](https://github.com/YGanchar/ContextExporter)** — prepares and
+  exports context; works with LLM-Control v2 in a local-LLM pipeline.
