@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# =============================================================================
+# zcode-monitor — быстрый статус LLM-сервера для ZCode
+#
+# Вызывается через SSH: ssh yuri@rtx "zcode-monitor"
+# Возвращает JSON с метриками сервера.
+#
+# Зависимости: bash, nvidia-smi, free, df, pgrep (стандартные утилиты Linux)
+# =============================================================================
+
+set -u
+
+# ---------------------------------------------------------------------------
+# Утилиты
+# ---------------------------------------------------------------------------
+
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\t'/\\t}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    printf '%s' "$s"
+}
+
+is_num() {
+    [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+# ---------------------------------------------------------------------------
+# Сбор метрик
+# ---------------------------------------------------------------------------
+
+# CPU: loadavg
+collect_cpu() {
+    if [[ -r /proc/loadavg ]]; then
+        read -r CPU_LOAD1 CPU_LOAD5 CPU_LOAD15 _ < /proc/loadavg
+    else
+        CPU_LOAD1="0"; CPU_LOAD5="0"; CPU_LOAD15="0"
+    fi
+    is_num "$CPU_LOAD1" || CPU_LOAD1="0"
+    is_num "$CPU_LOAD5" || CPU_LOAD5="0"
+    is_num "$CPU_LOAD15" || CPU_LOAD15="0"
+}
+
+# RAM: free -m
+collect_ram() {
+    if command -v free >/dev/null 2>&1; then
+        read -r RAM_TOTAL RAM_USED RAM_FREE RAM_AVAILABLE _ _ < <(free -m 2>/dev/null | awk 'NR==2{print $2, $3, $4, $7}')
+    else
+        RAM_TOTAL="0"; RAM_USED="0"; RAM_FREE="0"; RAM_AVAILABLE="0"
+    fi
+    is_num "$RAM_TOTAL" || RAM_TOTAL="0"
+    is_num "$RAM_USED"  || RAM_USED="0"
+    is_num "$RAM_FREE"  || RAM_FREE="0"
+    is_num "$RAM_AVAILABLE" || RAM_AVAILABLE="0"
+}
+
+# Диск: /srv/models
+collect_disk() {
+    local path="/srv/models"
+    if [[ -d "$path" ]]; then
+        DISK_FREE_MB="$(df -BM "$path" 2>/dev/null | awk 'NR==2{print $4}' | tr -cd '0-9')"
+    else
+        DISK_FREE_MB="0"
+    fi
+    is_num "$DISK_FREE_MB" || DISK_FREE_MB="0"
+    DISK_PATH="$path"
+}
+
+# GPU: nvidia-smi
+collect_gpu() {
+    GPU_JSON="[]"
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        local i=0
+        local gpu_count
+        gpu_count="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l)"
+        if [[ "$gpu_count" -gt 0 ]]; then
+            GPU_JSON="["
+            # Получаем все метрики одной командой, парсим построчно
+            local raw
+            raw="$(nvidia-smi --query-gpu=index,name,temperature.gpu,memory.used,memory.total --format=csv,noheader 2>/dev/null)"
+            while IFS=',' read -r idx name temp used total; do
+                [[ -z "$idx" ]] && continue
+                idx="$(echo "$idx" | tr -d ' ')"
+                name="$(echo "$name" | tr -d ' ')"
+                temp="$(echo "$temp" | tr -d ' ')"
+                used="$(echo "$used" | sed 's/MiB//g' | tr -d ' ')"
+                total="$(echo "$total" | sed 's/MiB//g' | tr -d ' ')"
+                is_num "$temp" || temp="0"
+                is_num "$used" || used="0"
+                is_num "$total" || total="0"
+                [[ $i -gt 0 ]] && GPU_JSON+=","
+                i=$((i + 1))
+                GPU_JSON+="{\"index\":$idx,\"name\":\"$(json_escape "$name")\",\"temp_c\":$temp,\"used_mb\":$used,\"total_mb\":$total}"
+            done <<< "$raw"
+            GPU_JSON+="]"
+        fi
+    fi
+}
+
+# llama-server instances: pgrep + parse cmdline
+collect_instances() {
+    INSTANCES_JSON="[]"
+    local pids
+    # Ищем только процессы llama-server, исключаем journalctl и grep
+    pids="$(pgrep -f '/usr/local/bin/llama-server' 2>/dev/null || true)"
+    if [[ -z "$pids" ]]; then
+        return
+    fi
+
+    local first=1
+    INSTANCES_JSON="["
+    while read -r pid; do
+        [[ -z "$pid" ]] && continue
+        local cmdline port model status="stopped"
+        cmdline="$(cat /proc/$pid/cmdline 2>/dev/null | tr '\0' ' ' || true)"
+        if [[ -n "$cmdline" ]]; then
+            # Извлекаем --port
+            port="$(echo "$cmdline" | grep -o -- '--port [0-9][0-9]*' | awk '{print $2}')"
+            # Извлекаем -m (модель)
+            model="$(echo "$cmdline" | awk '{for(i=1;i<=NF;i++){if($i=="-m"&&i<NF){print $(i+1);exit}}}')"
+            # Определяем статус по ответу на порт
+            if command -v curl >/dev/null 2>&1; then
+                if curl -sf --max-time 2 "http://localhost:${port:-0}/health" >/dev/null 2>&1; then
+                    status="active"
+                fi
+            elif command -v nc >/dev/null 2>&1; then
+                if nc -z -w2 localhost "${port:-0}" 2>/dev/null; then
+                    status="active"
+                fi
+            fi
+        fi
+        [[ $first -eq 0 ]] && INSTANCES_JSON+=","
+        first=0
+        INSTANCES_JSON+="{\"pid\":$pid,\"port\":${port:-0},\"model\":\"$(json_escape "$model")\",\"status\":\"$status\"}"
+    done <<< "$pids"
+    INSTANCES_JSON+="]"
+}
+
+# systemd status для сервисов
+collect_systemd_status() {
+    local svc1="inactive" svc2="inactive"
+    if command -v systemctl >/dev/null 2>&1; then
+        svc1="$(systemctl is-active llama-server 2>/dev/null | tr -d '[:space:]')"
+        svc2="$(systemctl is-active llama-server-8081 2>/dev/null | tr -d '[:space:]')"
+        [[ -z "$svc1" ]] && svc1="unknown"
+        [[ -z "$svc2" ]] && svc2="unknown"
+    fi
+    SYSTEMD_8080="$svc1"
+    SYSTEMD_8081="$svc2"
+}
+
+# ---------------------------------------------------------------------------
+# Сборка JSON
+# ---------------------------------------------------------------------------
+
+build_json() {
+    local ts
+    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%SZ)"
+
+    cat <<JSON_EOF
+{
+  "timestamp": "$ts",
+  "hostname": "$(hostname 2>/dev/null || echo 'unknown')",
+  "cpu": {
+    "load1": $CPU_LOAD1,
+    "load5": $CPU_LOAD5,
+    "load15": $CPU_LOAD15
+  },
+  "ram": {
+    "total_mb": $RAM_TOTAL,
+    "used_mb": $RAM_USED,
+    "free_mb": $RAM_FREE,
+    "available_mb": $RAM_AVAILABLE
+  },
+  "disk": {
+    "path": "$(json_escape "$DISK_PATH")",
+    "free_mb": $DISK_FREE_MB
+  },
+  "gpu": $GPU_JSON,
+  "instances": $INSTANCES_JSON,
+  "systemd": {
+    "llama-server-8080": "$SYSTEMD_8080",
+    "llama-server-8081": "$SYSTEMD_8081"
+  }
+}
+JSON_EOF
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+collect_cpu
+collect_ram
+collect_disk
+collect_gpu
+collect_instances
+collect_systemd_status
+
+build_json

@@ -1,0 +1,15 @@
+[Unit]
+Description=LLM Server Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=yuri
+WorkingDirectory=/home/yuri/projects/LLM-Cluster/LLM-Control-v2/bot
+ExecStart=/home/yuri/projects/LLM-Cluster/LLM-Control-v2/bot/.venv/bin/python llm_server_bot.py --token YOUR_BOT_TOKEN --chat-id YOUR_CHAT_ID
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
